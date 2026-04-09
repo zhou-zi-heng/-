@@ -25,28 +25,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 本地数据库引擎 (硬核持久化)
+# 2. 数据状态管理 (云端绝对隔离模式)
 # ==========================================
-DATA_DIR = "ZenMux_Data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-def load_data(filename, default_val):
-    filepath = os.path.join(DATA_DIR, filename)
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f: return json.load(f)
-        except: pass
-    return default_val
-
-def save_data(filename, data):
-    filepath = os.path.join(DATA_DIR, filename)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def save_profiles(): save_data("profiles.json", st.session_state.profiles)
-def save_sops(): save_data("sops.json", st.session_state.sops)
-def save_memory(): save_data("memory.json", st.session_state.memory)
-def save_free_chats(): save_data("free_chats.json", st.session_state.free_chats)
+# 彻底移除本地文件读写，防止多用户串号和 API Key 泄露
+# 用空的占位函数替换，保证不报错，但绝对不往服务器写数据
+def save_profiles(): pass
+def save_sops(): pass
+def save_memory(): pass
+def save_free_chats(): pass
 
 # ==========================================
 # 3. 核心底层辅助函数
@@ -153,36 +139,35 @@ def stream_generator(api_stream):
             st.session_state.auto_engine["last_finish_reason"] = chunk.choices[0].finish_reason
 
 # ==========================================
-# 4. 状态初始化 (无缝衔接本地数据)
+# 4. 状态初始化 (真正的私有沙盒)
 # ==========================================
-if "workspace_loaded" not in st.session_state:
-    st.session_state.profiles = load_data("profiles.json", [{
+if "initialized" not in st.session_state:
+    st.session_state.profiles = [{
         "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-sonnet-4.6",
         "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096
-    }])
-    st.session_state.sops = load_data("sops.json", {
+    }]
+    st.session_state.sops = {
         "小说账号预设": {
-            "memory_mode": "manual", "system_prompt": "你是一名顶尖小说家，文风冷峻。", "negative_memory": [],
-            "steps": [{"prompt": "撰写第【{循环索引}】章的内容", "loop": 2, "reference": ""}],
+            "memory_mode": "manual",
+            "system_prompt": "你是一名悬疑小说家，文风冷峻，绝不输出废话。",
+            "negative_memory": [],
+            "steps": [{"prompt": "撰写第【{循环索引}】章", "loop": 2, "reference": ""}],
             "triggers": [{"type": "terminate", "keyword": "全文完", "action": ""}]
         }
-    })
-    st.session_state.memory = load_data("memory.json", {})
-    st.session_state.free_chats = load_data("free_chats.json", {})
+    }
+    st.session_state.memory = {}
+    st.session_state.free_chats = {str(uuid.uuid4()): {"title": "新对话", "messages": []}}
     
-    if not st.session_state.free_chats:
-        st.session_state.free_chats[str(uuid.uuid4())] = {"title": "新对话", "messages": []}
-        
     st.session_state.active_profile_idx = 0
-    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     st.session_state.current_page = "🤖 自动化流水线"
+    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     st.session_state.auto_engine = {
         "is_running": False, "is_finished": False, "messages": [],
         "sop_name": "", "topic": "", "global_file": "",
         "current_step_idx": 0, "current_loop_idx": 1,
         "pending_instruction": "", "last_finish_reason": ""
     }
-    st.session_state.workspace_loaded = True
+    st.session_state.initialized = True
 
 # ==========================================
 # 5. 全局侧边栏导航
