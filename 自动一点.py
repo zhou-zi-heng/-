@@ -3,7 +3,6 @@ import streamlit.components.v1 as components
 from openai import OpenAI
 import io
 import json
-import os
 import re
 import requests
 import uuid
@@ -11,7 +10,7 @@ from datetime import datetime
 from docx import Document
 
 # ==========================================
-# 1. 页面配置与前端美化
+# 1. 页面全局配置与前端美化
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
@@ -19,45 +18,27 @@ st.markdown("""
     .stButton>button { border-radius: 8px; font-weight: bold; transition: all 0.3s; }
     .stChatInput { padding-bottom: 20px; }
     button[title="View fullscreen"] {display: none;}
+    .css-1jc7ptx, .e1ewe7hr3, .viewerBadge_container__1QSob, .styles_viewerBadge__1yB5_ {display: none;}
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 本地数据库引擎
-# ==========================================
-DATA_DIR = "ZenMux_Data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-def load_data(filename, default_val):
-    filepath = os.path.join(DATA_DIR, filename)
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception: pass
-    return default_val
-
-def save_data(filename, data):
-    filepath = os.path.join(DATA_DIR, filename)
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ==========================================
-# 3. 核心辅助函数
+# 2. 核心底层辅助函数
 # ==========================================
 def render_copy_button(text):
+    """注入 Google AI Studio 风格极简无感复制按钮"""
     safe_text = json.dumps(text)
     html = f"""
     <body style="margin:0; padding:0; overflow:hidden; display:flex; justify-content:flex-end;">
-        <button onclick="navigator.clipboard.writeText({safe_text}).then(()=>{{this.innerText='✅ 已复制'; setTimeout(()=>this.innerText='📋 复制内容',2000)}})" 
+        <button onclick="navigator.clipboard.writeText({safe_text}).then(()=>{{this.innerText='✅ 已复制'; setTimeout(()=>this.innerText='📋 复制纯文本',2000)}})" 
         style="border:none; background:none; color:#777; cursor:pointer; font-size:12px; font-weight:bold; padding:2px;">
-        📋 复制内容</button>
+        📋 复制纯文本</button>
     </body>
     """
     components.html(html, height=24)
 
 def clean_novel_text(text):
-    """正则洗稿引擎"""
+    """正则洗稿引擎：彻底清洗 AI 废话与代码块"""
     text = re.sub(r'^\s*(好的|没问题|非常荣幸|收到|为你生成|以下是|这是为您|正文开始|下面是).*?[:：]\n*', '', text, flags=re.MULTILINE|re.IGNORECASE)
     text = re.sub(r'^\s*第[零一二三四五六七八九十百千0-9]+[章回节卷].*?\n', '', text, flags=re.MULTILINE)
     text = re.sub(r'```[a-zA-Z]*\n?', '', text)
@@ -66,17 +47,15 @@ def clean_novel_text(text):
     return text.strip()
 
 def generate_word_doc(messages, is_pure=False):
-    """Word 生成器，支持完整版和纯享版"""
+    """动态 Word 生成器"""
     doc = Document()
-    doc.add_heading('内容文档', 0)
+    doc.add_heading('AI 创作者工作站生成文档', 0)
     for msg in messages:
         if msg["role"] == "system" or not msg.get("selected", True): continue
         if is_pure:
-            # 纯享版：只导出 AI 回答，且清洗废话，不加小标题
             if msg["role"] == "assistant":
                 doc.add_paragraph(clean_novel_text(msg["content"]))
         else:
-            # 完整版：保留对话和小标题
             if msg["role"] == "user":
                 doc.add_heading("📌 指令 / 我", level=2)
                 doc.add_paragraph(msg["content"])
@@ -86,6 +65,17 @@ def generate_word_doc(messages, is_pure=False):
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
+
+def fetch_models(base_url, api_key):
+    """动态获取大模型列表"""
+    try:
+        url = (base_url.strip() or "https://api.openai.com/v1") + "/models"
+        headers = {"Authorization": f"Bearer {api_key.strip()}"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return sorted([m["id"] for m in resp.json().get("data", [])])
+    except: pass
+    return []
 
 def get_client():
     profile = st.session_state.profiles[st.session_state.active_profile_idx]
@@ -102,6 +92,7 @@ def build_api_kwargs(profile, api_msgs):
     return kwargs
 
 def stream_generator(api_stream):
+    """拦截流状态，判定断点续传"""
     st.session_state.auto_engine["last_finish_reason"] = "stop"
     for chunk in api_stream:
         if chunk.choices and chunk.choices[0].delta.content is not None:
@@ -110,53 +101,67 @@ def stream_generator(api_stream):
             st.session_state.auto_engine["last_finish_reason"] = chunk.choices[0].finish_reason
 
 # ==========================================
-# 4. 状态初始化
+# 3. 核心状态初始化与 Workspace 资产管理
 # ==========================================
-if "initialized" not in st.session_state:
-    st.session_state.profiles = load_data("profiles.json", [{
+def init_default_workspace():
+    st.session_state.profiles = [{
         "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-sonnet-4.6",
         "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096
-    }])
-    st.session_state.sops = load_data("sops.json", {
-        "悬疑小说账号": {
-            "memory_mode": "manual", # manual(手动蒸馏) 或 dynamic(动态进化)
-            "system_prompt": "你是一名悬疑小说家，文风冷峻，绝不输出废话。",
-            "negative_memory": [], # 存放用户的避坑反馈
-            "steps": [{"prompt": "撰写第【{循环索引}】章", "loop": 2, "reference": ""}],
+    }]
+    st.session_state.sops = {
+        "小说账号预设": {
+            "memory_mode": "manual", "system_prompt": "你是一名顶尖小说家，文风冷峻。绝对不要输出废话。", "negative_memory": [],
+            "steps": [{"prompt": "撰写第【{循环索引}】章的内容", "loop": 2, "reference": ""}],
             "triggers": [{"type": "terminate", "keyword": "全文完", "action": ""}]
         }
-    })
-    st.session_state.memory = load_data("memory.json", {}) 
-    
-    # 自由聊天室持久化数据：{ chat_id: { title: "...", messages: [...] } }
-    st.session_state.free_chats = load_data("free_chats.json", {})
-    if not st.session_state.free_chats:
-        new_id = str(uuid.uuid4())
-        st.session_state.free_chats[new_id] = {"title": "新对话", "messages": []}
-        st.session_state.current_chat_id = new_id
-    else:
-        st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-    
+    }
+    st.session_state.memory = {}
+    st.session_state.free_chats = {str(uuid.uuid4()): {"title": "新对话", "messages": []}}
     st.session_state.active_profile_idx = 0
+
+if "workspace_loaded" not in st.session_state:
+    init_default_workspace()
     st.session_state.current_page = "🤖 自动化流水线"
+    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     st.session_state.auto_engine = {
         "is_running": False, "is_finished": False, "messages": [],
         "sop_name": "", "topic": "", "global_file": "",
         "current_step_idx": 0, "current_loop_idx": 1,
         "pending_instruction": "", "last_finish_reason": ""
     }
-    st.session_state.initialized = True
+    st.session_state.workspace_loaded = True
 
-def save_profiles(): save_data("profiles.json", st.session_state.profiles)
-def save_sops(): save_data("sops.json", st.session_state.sops)
-def save_memory(): save_data("memory.json", st.session_state.memory)
-def save_free_chats(): save_data("free_chats.json", st.session_state.free_chats)
+def export_workspace():
+    """打包所有资产快照"""
+    return json.dumps({
+        "profiles": st.session_state.profiles,
+        "sops": st.session_state.sops,
+        "memory": st.session_state.memory,
+        "free_chats": st.session_state.free_chats
+    }, ensure_ascii=False, indent=2).encode('utf-8')
+
+def import_workspace(json_str):
+    """一键恢复快照"""
+    try:
+        data = json.loads(json_str)
+        st.session_state.profiles = data.get("profiles", [])
+        st.session_state.sops = data.get("sops", {})
+        st.session_state.memory = data.get("memory", {})
+        st.session_state.free_chats = data.get("free_chats", {str(uuid.uuid4()): {"title": "新对话", "messages": []}})
+        st.session_state.active_profile_idx = 0
+        st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+        st.success("✅ 资产快照恢复成功！所有账号与记忆已就绪！")
+    except Exception as e:
+        st.error(f"❌ 恢复失败，文件格式有误：{e}")
 
 # ==========================================
-# 5. 全局侧边栏导航
+# 4. 全局侧边栏导航与资产快照区
 # ==========================================
 with st.sidebar:
-    st.header("🐙 创作者中枢")
+    col_img, col_txt = st.columns([1, 3])
+    with col_img: st.image("https://api.iconify.design/fluent-emoji:octopus.svg?width=80", width=45)
+    with col_txt: st.header("控制中枢")
+    
     st.write("") 
     pages = ["🤖 自动化流水线", "💬 自由聊天区", "📝 账号SOP与灵魂", "⚙️ 底层引擎配置"]
     for p in pages:
@@ -167,47 +172,56 @@ with st.sidebar:
 
     active_p = st.session_state.profiles[st.session_state.active_profile_idx]
     st.divider()
-    st.caption(f"🟢 **挂载引擎**: {active_p['name']}\n🧠 **模型**: {active_p['model']}")
+    st.caption(f"🟢 **当前挂载**: {active_p['name']}\n🧠 **模型**: {active_p['model']}")
     
-    # --- 自由聊天专属历史管理与导出区 ---
+    # 自由聊天室侧边栏控件
     if st.session_state.current_page == "💬 自由聊天区":
         st.divider()
-        st.header("📚 历史对话记录")
+        st.header("📚 历史对话")
         if st.button("➕ 开启新对话", use_container_width=True, type="primary"):
             new_id = str(uuid.uuid4())
             st.session_state.free_chats[new_id] = {"title": "新对话", "messages": []}
             st.session_state.current_chat_id = new_id
-            save_free_chats(); st.rerun()
+            st.rerun()
             
         for c_id, c_data in reversed(list(st.session_state.free_chats.items())):
-            c_title = c_data["title"][:15] + "..." if len(c_data["title"])>15 else c_data["title"]
+            c_title = c_data["title"][:12] + "..." if len(c_data["title"])>12 else c_data["title"]
             btn_lbl = f"⭐ {c_title}" if c_id == st.session_state.current_chat_id else f"📄 {c_title}"
             if st.button(btn_lbl, key=f"chat_{c_id}", use_container_width=True):
                 st.session_state.current_chat_id = c_id; st.rerun()
                 
         st.divider()
-        st.header("📦 导出当前对话")
         current_msgs = st.session_state.free_chats[st.session_state.current_chat_id]["messages"]
         if current_msgs:
-            exp_mode = st.radio("导出格式选择", ["完整版 (保留对话)", "纯享版 (仅清洗后正文)"])
-            is_pure = (exp_mode == "纯享版 (仅清洗后正文)")
-            
+            st.markdown("**📦 导出当前对话**")
+            exp_mode = st.radio("格式选项", ["完整记录", "纯享正文 (清洗后)"], label_visibility="collapsed")
+            is_pure = (exp_mode == "纯享正文 (清洗后)")
             if is_pure:
                 txt_content = "\n\n".join([clean_novel_text(m['content']) for m in current_msgs if m['role']=='assistant'])
             else:
                 txt_content = "".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n\n" for m in current_msgs])
-                
+            
             c1, c2 = st.columns(2)
-            with c1: st.download_button("📥 TXT", txt_content.encode('utf-8'), "聊天记录.txt", "text/plain")
-            with c2: st.download_button("📥 Word", generate_word_doc(current_msgs, is_pure=is_pure), "聊天记录.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            with c1: st.download_button("📥 TXT", txt_content.encode('utf-8'), "聊天记录.txt", "text/plain", use_container_width=True)
+            with c2: st.download_button("📥 Word", generate_word_doc(current_msgs, is_pure), "聊天记录.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
 
-        if st.button("🗑️ 删除此对话", use_container_width=True):
+        if st.button("🗑️ 删除对话", use_container_width=True):
             if len(st.session_state.free_chats) > 1:
                 del st.session_state.free_chats[st.session_state.current_chat_id]
                 st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
             else:
                 st.session_state.free_chats[st.session_state.current_chat_id] = {"title": "新对话", "messages": []}
-            save_free_chats(); st.rerun()
+            st.rerun()
+
+    # 全量资产导出/导入区 (替代容易丢数据的本地 I/O)
+    st.divider()
+    with st.expander("📦 资产备份与恢复 (极其重要)", expanded=False):
+        st.caption("防丢失！工作结束后请务必导出快照。换电脑时一键上传满血复活。")
+        st.download_button("📥 导出全量资产快照", export_workspace(), f"ZenMux_Workspace_{datetime.now().strftime('%m%d')}.json", "application/json", use_container_width=True, type="primary")
+        uploaded_ws = st.file_uploader("📂 导入快照 (将覆盖当前)", type="json")
+        if uploaded_ws:
+            import_workspace(uploaded_ws.getvalue().decode('utf-8'))
+            st.rerun()
 
 # ==========================================
 # 模块 1: 自动化流水线
@@ -217,7 +231,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
     col_ctrl, col_view = st.columns([1, 2.5])
     
     with col_ctrl:
-        st.header("⚙️ 控制台")
+        st.header("⚙️ 调度控制台")
         if engine["is_running"]:
             st.warning("⚠️ 引擎高速运转中...")
             total_steps = max(len(st.session_state.sops[engine["sop_name"]]["steps"]), 1)
@@ -225,7 +239,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
             if st.button("⏹️ 强制急停", type="primary", use_container_width=True): 
                 engine["is_running"] = False; st.rerun()
         else:
-            sel_sop = st.selectbox("1. 选择执行 SOP", list(st.session_state.sops.keys()))
+            sel_sop = st.selectbox("1. 挂载执行 SOP (账号人设)", list(st.session_state.sops.keys()))
             in_topic = st.text_input("2. 注入 {主题}", placeholder="例如：赛博朋克修仙传")
             up_file = st.file_uploader("3. 挂载全局设定集 (可选)", type=['txt', 'md'])
             
@@ -246,7 +260,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
         
         # 📦 成果验收与双轨制记忆系统
         if engine["messages"]:
-            st.markdown("### 📦 验收成果")
+            st.markdown("### 📦 成果验收与记忆管理")
             sel_msgs = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]
             raw_text = "\n\n".join([m["content"] for m in sel_msgs])
             pure_text = clean_novel_text(raw_text)
@@ -255,47 +269,45 @@ if st.session_state.current_page == "🤖 自动化流水线":
                 sop_data = st.session_state.sops[engine["sop_name"]]
                 mem_mode = sop_data.get("memory_mode", "manual")
                 
-                # --- 双轨记忆逻辑分发 ---
+                # --- 双轨记忆逻辑 ---
                 if mem_mode == "manual":
-                    st.info("🧠 当前为【手动蒸馏模式】")
-                    if st.button("💾 将本次佳作存入记忆库", type="primary", use_container_width=True):
+                    st.info("🧠 记忆模式：【手动提取蒸馏】")
+                    if st.button("💾 将本次佳作存入该账号记忆保险库", type="primary", use_container_width=True):
                         sop_name = engine["sop_name"]
                         if sop_name not in st.session_state.memory: st.session_state.memory[sop_name] = []
                         st.session_state.memory[sop_name].append({
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "topic": engine["topic"], "content": pure_text[:2500]
                         })
-                        save_memory(); st.toast("已存入硬盘！", icon="💾")
+                        st.toast("已安全存入浏览器记忆保险库！", icon="💾")
                 else:
-                    st.success("🌱 当前为【动态进化模式】")
-                    st.caption("AI 表现不好？直接在下方骂它，系统会自动记忆并纠正。")
+                    st.success("🌱 记忆模式：【动态活体进化】")
+                    st.caption("AI 表现欠佳？直接纠正，系统会自动记住。")
                     feedback = st.text_input("💬 对本次生成的避坑要求/反馈：", placeholder="例如：以后不准废话，动作描写再利落点")
-                    if st.button("提交反馈并写入潜意识", use_container_width=True):
+                    if st.button("提交反馈并写入账号潜意识", use_container_width=True):
                         if feedback.strip():
                             if "negative_memory" not in sop_data: sop_data["negative_memory"] = []
                             sop_data["negative_memory"].append(feedback)
-                            save_sops()
                             
-                            # 静默融合逻辑：满3条自动提炼
+                            # 动态模式下自动提炼融合
                             if len(sop_data["negative_memory"]) >= 3:
-                                with st.spinner("系统正在后台反思并融合新规则..."):
+                                with st.spinner("系统后台反思并融合新规则中..."):
                                     try:
                                         client, profile = get_client()
                                         fusion_prompt = f"""你是一个人设调优专家。原人设：{sop_data['system_prompt']}。
-用户近期提出了以下避坑反馈：{'; '.join(sop_data['negative_memory'])}。
-请将这些反馈深度融合进原人设中，形成一段更完美、绝对服从用户要求的新 System Prompt。只输出纯文本。"""
+用户近期避坑反馈：{'; '.join(sop_data['negative_memory'])}。
+请将这些反馈深度融合进原人设，形成一段更完美、绝对服从用户要求的新 System Prompt。只输出纯文本。"""
                                         resp = client.chat.completions.create(model=profile["model"], messages=[{"role": "user", "content": fusion_prompt}])
                                         sop_data["system_prompt"] = resp.choices[0].message.content.strip()
-                                        sop_data["negative_memory"] = [] # 清空已消化的记忆
-                                        save_sops()
-                                        st.success("反馈已吸收！人设已自动进化！")
+                                        sop_data["negative_memory"] = []
+                                        st.success("反馈已吸收！人设已自动完成进化！")
                                     except Exception as e: st.error(f"融合失败: {e}")
                             else:
                                 st.toast("反馈已记录，下一次生成立即生效！", icon="✅")
 
             c1, c2 = st.columns(2)
             with c1: st.download_button("📥 标准全文", raw_text.encode('utf-8'), f"{engine['topic']}_完整.txt", "text/plain", use_container_width=True)
-            with c2: st.download_button("✨ 纯正文", pure_text.encode('utf-8'), f"{engine['topic']}_纯正文.txt", "text/plain", use_container_width=True)
+            with c2: st.download_button("✨ 纯享正文", pure_text.encode('utf-8'), f"{engine['topic']}_纯正文.txt", "text/plain", use_container_width=True)
             
             if st.button("🧹 清理工作台", use_container_width=True): 
                 engine.update({"messages": [], "is_finished": False, "is_running": False}); st.rerun()
@@ -308,7 +320,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                 st.markdown(msg["content"])
                 if msg["role"] == "assistant":
                     render_copy_button(msg["content"])
-                    msg["selected"] = st.checkbox("☑️ 选中导出", msg.get("selected", True), key=f"ac_{i}")
+                    msg["selected"] = st.checkbox("☑️ 选中参与导出", msg.get("selected", True), key=f"ac_{i}")
 
         if engine["is_running"]:
             client, profile = get_client()
@@ -320,25 +332,25 @@ if st.session_state.current_page == "🤖 自动化流水线":
             current_prompt = engine["pending_instruction"] or curr_step["prompt"].replace("{主题}", engine["topic"]).replace("{循环索引}", str(engine["current_loop_idx"]))
             engine["pending_instruction"] = ""
             
-            # 【防线1：系统级物理封口贴】直接焊接在用户指令后，斩断废话根源
-            silence_constraint = "\n\n【系统级强制约束：绝对不要重复要求，不要说“好的”、“为你生成”，绝对不要带有章节标题（如“第一章”），直接且只输出正文段落！】"
+            # 【终极防线：底层物理封口贴】
+            silence_constraint = "\n\n【系统强制指令：绝对不要重复上文，不准说“好的”，不准带章节标题，直接从正文第一个字开始输出！】"
             final_prompt_to_api = current_prompt + silence_constraint
             
-            engine["messages"].append({"role": "user", "content": current_prompt, "selected": False}) # UI上不显示封口贴
+            engine["messages"].append({"role": "user", "content": current_prompt, "selected": False})
             with st.chat_message("user"): st.markdown(f"*(⚡ 指令)*: {current_prompt}")
                 
             api_msgs = []
             sys_prompt = sop_data.get("system_prompt", "").strip()
             if sys_prompt: api_msgs.append({"role": "system", "content": sys_prompt})
             
-            # 动态记忆实时注入
+            # 动态记忆临时追加
             if sop_data.get("memory_mode", "manual") == "dynamic" and sop_data.get("negative_memory"):
-                api_msgs.append({"role": "system", "content": f"【避坑铁律】：{'; '.join(sop_data['negative_memory'])}"})
+                api_msgs.append({"role": "system", "content": f"【必须遵守的避坑铁律】：{'; '.join(sop_data['negative_memory'])}"})
             
             if engine["global_file"]: api_msgs.append({"role": "system", "content": f"【全局设定】\n{engine['global_file']}"})
             if curr_step.get("reference"): api_msgs.append({"role": "system", "content": f"【本阶段设定】\n{curr_step['reference']}"})
             
-            # 组装历史，替换用户最后一条指令为带有封口贴的版本
+            # 组装消息，替换最后一条
             for idx, m in enumerate(engine["messages"]):
                 if idx == len(engine["messages"]) - 1 and m["role"] == "user":
                     api_msgs.append({"role": "user", "content": final_prompt_to_api})
@@ -354,7 +366,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     
                     hit_trigger = False
                     if engine["last_finish_reason"] == "length":
-                        engine["pending_instruction"] = "⚠️ 请紧接着上文最后一个字继续输出，不要重复前文。"
+                        engine["pending_instruction"] = "⚠️ 因字数限制中断，请紧接着上文最后一个字继续往下写。"
                         hit_trigger = True
                     if not hit_trigger:
                         for t in triggers:
@@ -371,7 +383,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             
                     st.rerun() 
                 except Exception as e:
-                    st.error(f"引擎故障: {e}"); engine["is_running"] = False
+                    st.error(f"引擎发生故障: {e}"); engine["is_running"] = False
 
 # ==========================================
 # 模块 2: 自由聊天区
@@ -386,12 +398,11 @@ elif st.session_state.current_page == "💬 自由聊天区":
             st.markdown(msg["content"])
             if msg["role"] == "assistant": render_copy_button(msg["content"])
 
-    if prompt := st.chat_input("探讨设定、查资料..."):
-        if not active_p["api_key"]: st.error("缺 API Key！"); st.stop()
+    if prompt := st.chat_input("输入问题、查资料、聊脑洞..."):
+        if not active_p["api_key"]: st.error("请先前往底层配置 API Key！"); st.stop()
         
-        # 智能命名对话
         if len(curr_chat["messages"]) == 0:
-            curr_chat["title"] = prompt[:10]
+            curr_chat["title"] = prompt[:10] + "..."
             
         curr_chat["messages"].append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
@@ -405,7 +416,6 @@ elif st.session_state.current_page == "💬 自由聊天区":
                 full_resp = st.write_stream(resp)
                 render_copy_button(full_resp)
                 curr_chat["messages"].append({"role": "assistant", "content": full_resp})
-                save_free_chats() # 每聊一句落盘一次
                 st.rerun()
             except Exception as e: st.error(f"请求失败: {e}")
 
@@ -413,53 +423,42 @@ elif st.session_state.current_page == "💬 自由聊天区":
 # 模块 3: 账号SOP与灵魂
 # ==========================================
 elif st.session_state.current_page == "📝 账号SOP与灵魂":
-    tab_sop, tab_style = st.tabs(["🧩 SOP配置与人设", "🧠 账号风格提取与蒸馏"])
+    tab_sop, tab_vault = st.tabs(["🧩 SOP配置与人设管理", "🗄️ 账号记忆保险库 (风格蒸馏)"])
     
     with tab_sop:
         col1, col2 = st.columns([1, 2.5])
         with col1:
-            st.subheader("账号/SOP 库")
+            st.subheader("账号 SOP 库")
             s_name = st.radio("选择编辑对象", list(st.session_state.sops.keys())) if st.session_state.sops else None
             if st.button("➕ 创建新账号 SOP"):
                 st.session_state.sops[f"新账号 {len(st.session_state.sops)}"] = {
                     "memory_mode": "manual", "system_prompt": "", "negative_memory": [],
                     "steps": [{"prompt": "", "loop": 1}], "triggers": []
                 }
-                save_sops(); st.rerun()
-            st.divider()
-            sop_json = json.dumps(st.session_state.sops, ensure_ascii=False, indent=2).encode('utf-8')
-            st.download_button("💾 导出 SOP 库", sop_json, "SOP库.json", "application/json")
+                st.rerun()
 
         with col2:
             if s_name:
                 sop = st.session_state.sops[s_name]
-                
-                ca, cb = st.columns([3, 1])
-                with ca: new_name = st.text_input("✏️ 账号 SOP 名称", s_name)
-                with cb:
-                    st.write("")
-                    if st.button("💾 手动保存配置", type="primary", use_container_width=True):
-                        save_sops(); st.success("配置已落盘保存！")
+                new_name = st.text_input("✏️ 账号名称 (改名自动迁移记忆)", s_name)
 
                 if new_name != s_name and new_name.strip():
                     st.session_state.sops[new_name] = st.session_state.sops.pop(s_name)
                     if s_name in st.session_state.memory:
                         st.session_state.memory[new_name] = st.session_state.memory.pop(s_name)
-                        save_memory()
-                    save_sops(); st.rerun()
+                    st.rerun()
                 
-                # --- 双轨制记忆核心开关 ---
                 st.markdown("### 🧠 记忆生长模式")
-                mode_opts = {"manual": "保守派：手动总结蒸馏 (稳定可控)", "dynamic": "激进派：自动活体进化 (越训越聪明)"}
-                sop["memory_mode"] = st.radio("选择该账号的成长路线", ["manual", "dynamic"], format_func=lambda x: mode_opts[x], index=0 if sop.get("memory_mode", "manual")=="manual" else 1)
+                mode_opts = {"manual": "保守派：手动挑选好文章提取风格 (稳健可控)", "dynamic": "激进派：自动活体记忆避坑反馈 (越训越聪明)"}
+                sop["memory_mode"] = st.radio("选择成长路线", ["manual", "dynamic"], format_func=lambda x: mode_opts[x], index=0 if sop.get("memory_mode", "manual")=="manual" else 1, label_visibility="collapsed")
                 
                 if sop["memory_mode"] == "dynamic" and sop.get("negative_memory"):
-                    with st.expander("👀 查看当前尚未融合的避坑反馈", expanded=True):
+                    with st.expander("👀 查看当前已吸收但尚未完全融合的【避坑清单】", expanded=True):
                         for nm in sop["negative_memory"]: st.markdown(f"- {nm}")
-                        if st.button("清空避坑库"): sop["negative_memory"] = []; save_sops(); st.rerun()
+                        if st.button("强行清空避坑清单"): sop["negative_memory"] = []; st.rerun()
                 
                 st.markdown("### 🎭 账号专属人设 (System Prompt)")
-                sop["system_prompt"] = st.text_area("核心指令", sop.get("system_prompt", ""), height=100)
+                sop["system_prompt"] = st.text_area("核心指令 (可被蒸馏功能自动改写)", sop.get("system_prompt", ""), height=100)
                 
                 st.markdown("### 🧩 执行阶段配置")
                 new_steps = []
@@ -470,70 +469,72 @@ elif st.session_state.current_page == "📝 账号SOP与灵魂":
                         with c1: p_val = st.text_area("指令", step["prompt"], height=60, key=f"p_{i}", label_visibility="collapsed")
                         with c2: l_val = st.number_input("循环", min_value=1, value=step.get("loop", 1), key=f"l_{i}")
                         ref = step.get("reference", "")
-                        with st.expander("📁 挂载阶段参考资料"): ref = st.text_area("粘贴资料", ref, key=f"r_{i}")
+                        with st.expander("📁 挂载该阶段专属资料"): ref = st.text_area("粘贴文本", ref, key=f"r_{i}")
                         new_steps.append({"prompt": p_val, "loop": l_val, "reference": ref})
                 sop["steps"] = new_steps
                 
                 c_a, c_b = st.columns(2)
                 with c_a: 
-                    if st.button("➕ 加阶段"): sop["steps"].append({"prompt":"", "loop":1}); save_sops(); st.rerun()
+                    if st.button("➕ 加阶段", use_container_width=True): sop["steps"].append({"prompt":"", "loop":1}); st.rerun()
                 with c_b:
-                    if len(sop["steps"])>1 and st.button("➖ 删阶段"): sop["steps"].pop(); save_sops(); st.rerun()
+                    if len(sop["steps"])>1 and st.button("➖ 删阶段", use_container_width=True): sop["steps"].pop(); st.rerun()
                 
-                st.markdown("### ⚡ 监听触发器")
+                st.markdown("### ⚡ 监听触发器网络")
                 new_triggers = []
                 for i, t in enumerate(sop.get("triggers", [])):
                     with st.container(border=True):
                         t1, t2, t3 = st.columns([1, 1, 2])
-                        with t1: typ = st.selectbox("规则", ["terminate", "intervene"], index=0 if t["type"]=="terminate" else 1, key=f"t_{i}")
+                        with t1: typ = st.selectbox("类型", ["terminate", "intervene"], index=0 if t["type"]=="terminate" else 1, key=f"t_{i}")
                         with t2: kwd = st.text_input("关键词", t["keyword"], key=f"k_{i}")
-                        with t3: act = st.text_input("动作(强制完结不填)", t.get("action", ""), disabled=(typ=="terminate"), key=f"a_{i}")
+                        with t3: act = st.text_input("动作指令", t.get("action", ""), disabled=(typ=="terminate"), key=f"a_{i}")
                         new_triggers.append({"type": typ, "keyword": kwd, "action": act})
                 sop["triggers"] = new_triggers
-                if st.button("➕ 加规则"): sop["triggers"].append({"type":"intervene", "keyword":"", "action":""}); save_sops(); st.rerun()
+                if st.button("➕ 加规则"): sop["triggers"].append({"type":"intervene", "keyword":"", "action":""}); st.rerun()
                 
                 st.divider()
-                if st.button("🗑️ 删除此 SOP", type="primary"): 
+                if st.button("🗑️ 删除此 SOP (将连带清除其记忆库)", type="primary"): 
                     del st.session_state.sops[s_name]
                     if s_name in st.session_state.memory: del st.session_state.memory[s_name]
-                    save_sops(); save_memory(); st.rerun()
+                    st.rerun()
 
-    with tab_style:
-        st.header("🧠 账号风格提取与蒸馏 (适用于手动模式)")
-        st.markdown("通过分析 SOP 记忆库中的优秀作品，自动提炼灵魂提示词，注入该 SOP 的专属人设中。")
+    with tab_vault:
+        st.header("🗄️ 记忆保险库与炼丹炉")
+        st.markdown("这里安全存放着该账号生成过的所有优秀作品快照。")
         
         acc_mem = st.session_state.memory.get(s_name, [])
         if not acc_mem:
-            st.info(f"【{s_name}】的记忆库为空。请先在工作台生成并保存佳作。")
+            st.info(f"【{s_name}】保险库为空。请先去自动化工作台执行并保存。")
         else:
-            st.success(f"记忆库已积累 {len(acc_mem)} 篇作品。")
-            with st.expander("🔍 预览记忆库"):
-                for item in acc_mem:
-                    st.write(f"**[{item['time']}] {item['topic']}**")
-                    st.caption(item['content'][:100] + "...")
+            st.success(f"🗃️ 记忆库已沉淀 {len(acc_mem)} 篇高质作品。")
+            for idx, item in enumerate(reversed(acc_mem)):
+                with st.expander(f"📖 [{item['time']}] {item['topic']}"):
+                    st.caption(item['content'])
+                    if st.button("🗑️ 抹除此记忆", key=f"del_mem_{idx}"):
+                        st.session_state.memory[s_name].remove(item)
+                        st.rerun()
             
-            if st.button("🔥 立即执行风格蒸馏", type="primary", use_container_width=True):
+            st.divider()
+            if st.button("🔥 立即开炉提炼灵魂 (风格蒸馏)", type="primary", use_container_width=True):
                 if not active_p["api_key"]: st.error("缺 API Key！"); st.stop()
                 client, profile = get_client()
                 combined_texts = "\n\n---\n\n".join([m['content'] for m in acc_mem[-3:]])
-                distill_prompt = f"""分析以下几篇小说的风格，总结出一段严谨的【System Prompt】以便未来复刻此文风。只需输出纯文本的 Prompt，无废话。
+                distill_prompt = f"""深度分析以下几篇小说的风格，提炼一段极度严谨的【System Prompt】以便未来完美复刻此文风。只需输出纯文本的 Prompt。
 样本：\n{combined_texts}"""
 
-                with st.spinner("正在提炼灵魂提示词..."):
+                with st.spinner("神级炼丹师正在提炼灵魂设定..."):
                     try:
                         resp = client.chat.completions.create(model=profile["model"], messages=[{"role": "user", "content": distill_prompt}])
                         distilled_prompt = resp.choices[0].message.content.strip()
                         st.session_state.sops[s_name]["system_prompt"] = distilled_prompt
-                        save_sops()
-                        st.success("🎉 蒸馏成功！该 SOP 的【专属人设】已被永久强化更新！")
-                        st.info(f"**提炼出的专属灵魂提示词:**\n\n{distilled_prompt}")
+                        st.success("🎉 蒸馏成功！该 SOP 的【专属人设】已被注入全新灵魂！")
+                        st.info(f"**提炼成果:**\n\n{distilled_prompt}")
                     except Exception as e: st.error(f"蒸馏失败: {e}")
 
 # ==========================================
 # 模块 4: 底层引擎配置
 # ==========================================
 elif st.session_state.current_page == "⚙️ 底层引擎配置":
-    st.header("⚙️ 底层引擎管理")
+    st.header("⚙️ 底层驱动配置")
     col_list, col_edit = st.columns([1, 2.5])
     
     with col_list:
@@ -547,35 +548,30 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                 "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096
             }
             st.session_state.profiles.append(new_profile)
-            save_profiles(); st.rerun()
+            st.rerun()
 
     with col_edit:
-        st.subheader("底层参数设置")
+        st.subheader("网络与参数调优")
         p = st.session_state.profiles[idx]
         
-        ca, cb = st.columns([3, 1])
-        with ca: p["name"] = st.text_input("引擎标签名称", p["name"])
-        with cb:
-            st.write("")
-            if st.button("💾 保存引擎配置", type="primary", use_container_width=True): save_profiles(); st.success("已保存！")
-
+        p["name"] = st.text_input("引擎标签", p["name"])
         c1, c2 = st.columns(2)
-        with c1: p["base_url"] = st.text_input("Base URL", p["base_url"])
+        with c1: p["base_url"] = st.text_input("Base URL (支持中转API)", p["base_url"])
         with c2: p["api_key"] = st.text_input("API Key", p["api_key"], type="password")
         
         cm, cb = st.columns([3, 1])
-        with cm: p["model"] = st.text_input("模型 (Model ID)", p["model"])
+        with cm: p["model"] = st.text_input("模型映射 (Model ID)", p["model"])
         with cb:
             st.write("")
-            if st.button("🔄 获取模型列表"):
+            if st.button("🔄 联机获取列表"):
                 if p["api_key"]:
                     models = fetch_models(p["base_url"], p["api_key"])
                     if models: st.session_state.temp_models = models
         if "temp_models" in st.session_state:
-            sel_m = st.selectbox("覆盖模型", ["(不覆盖)"] + st.session_state.temp_models)
-            if sel_m != "(不覆盖)": p["model"] = sel_m; del st.session_state.temp_models; save_profiles(); st.rerun()
+            sel_m = st.selectbox("选择支持的模型", ["(不覆盖)"] + st.session_state.temp_models)
+            if sel_m != "(不覆盖)": p["model"] = sel_m; del st.session_state.temp_models; st.rerun()
                 
-        st.markdown("#### 🎛️ 运行时超参数")
+        st.markdown("#### 🎛️ 运行时超参数 (勾选生效)")
         sl1, sl2 = st.columns(2)
         with sl1:
             p["use_temperature"] = st.checkbox("🔥 Temperature", p.get("use_temperature", True))
@@ -587,5 +583,3 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             if p["use_top_p"]: p["top_p"] = st.slider("值", 0.0, 1.0, p.get("top_p", 1.0), 0.05, label_visibility="collapsed")
             p["use_frequency_penalty"] = st.checkbox("🚫 Frequency Penalty", p.get("use_frequency_penalty", False))
             if p["use_frequency_penalty"]: p["frequency_penalty"] = st.slider("值", -2.0, 2.0, p.get("frequency_penalty", 0.0), 0.1, label_visibility="collapsed")
-
-        save_profiles() # 实时静默落盘
