@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from openai import OpenAI
 import io
+import base64
 import json
 import os
 import re
@@ -51,15 +52,38 @@ def save_free_chats(): save_data("free_chats.json", st.session_state.free_chats)
 # 3. 核心底层辅助函数
 # ==========================================
 def render_copy_button(text):
-    safe_text = json.dumps(text)
+    """完美无痕复制按钮（Base64 防断码版）"""
+    # 将长文本安全转为 Base64，彻底杜绝 HTML 单双引号冲突
+    b64_text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+    
     html = f"""
-    <body style="margin:0; padding:0; overflow:hidden; display:flex; justify-content:flex-end;">
-        <button onclick="navigator.clipboard.writeText({safe_text}).then(()=>{{this.innerText='✅ 已复制'; setTimeout(()=>this.innerText='📋 复制纯文本',2000)}})" 
-        style="border:none; background:none; color:#777; cursor:pointer; font-size:12px; font-weight:bold; padding:2px;">
-        📋 复制纯文本</button>
-    </body>
+    <div style="display:flex; justify-content:flex-end; align-items:center; width:100%; height:100%; margin:0; padding-right:10px;">
+        <button id="copyBtn" 
+            style="border:none; background:transparent; color:#aaa; cursor:pointer; font-size:12px; font-weight:bold; padding:5px 10px; border-radius:6px; transition:0.2s;"
+            onmouseover="this.style.color='#4CAF50'; this.style.backgroundColor='#f0f9f0'" 
+            onmouseout="this.style.color='#aaa'; this.style.backgroundColor='transparent'"
+        >
+            📋 复制纯文本
+        </button>
+    </div>
+    <script>
+        document.getElementById("copyBtn").onclick = function() {{
+            // JS 解码 Base64 还原中文文本
+            const str = decodeURIComponent(escape(window.atob("{b64_text}")));
+            navigator.clipboard.writeText(str).then(function() {{
+                const btn = document.getElementById("copyBtn");
+                btn.innerText = "✅ 复制成功";
+                btn.style.color = "#4CAF50";
+                setTimeout(function() {{ 
+                    btn.innerText = "📋 复制纯文本"; 
+                    btn.style.color = "#aaa";
+                }}, 2000);
+            }});
+        }};
+    </script>
     """
-    components.html(html, height=24)
+    # height=35 刚刚好，不会出现难看的滚动条
+    components.html(html, height=35)
 
 def clean_novel_text(text):
     text = re.sub(r'^\s*(好的|没问题|非常荣幸|收到|为你生成|以下是|这是为您|正文开始|下面是).*?[:：]\n*', '', text, flags=re.MULTILINE|re.IGNORECASE)
@@ -88,14 +112,23 @@ def generate_word_doc(messages, is_pure=False):
     return bio.getvalue()
 
 def fetch_models(base_url, api_key):
+    """动态获取大模型列表，带详细报错捕获"""
     try:
-        url = (base_url.strip() or "https://api.openai.com/v1") + "/models"
+        # 自动处理 URL 结尾可能多出的斜杠
+        url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
         headers = {"Authorization": f"Bearer {api_key.strip()}"}
-        resp = requests.get(url, headers=headers, timeout=5)
+        # 设置8秒超时
+        resp = requests.get(url, headers=headers, timeout=8) 
+        
         if resp.status_code == 200:
-            return sorted([m["id"] for m in resp.json().get("data", [])])
-    except: pass
-    return []
+            models = sorted([m["id"] for m in resp.json().get("data", [])])
+            return True, models
+        else:
+            return False, f"API 拒绝请求 (状态码: {resp.status_code})。返回详情: {resp.text[:100]}"
+    except requests.exceptions.RequestException as e:
+        return False, f"网络连接失败或超时，请检查 Base URL 是否正确或是否需要代理。详情: {e}"
+    except Exception as e:
+        return False, f"数据解析异常: {e}"
 
 def get_client():
     profile = st.session_state.profiles[st.session_state.active_profile_idx]
@@ -562,11 +595,26 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             st.write("")
             if st.button("🔄 联机获取列表"):
                 if p["api_key"]:
-                    models = fetch_models(p["base_url"], p["api_key"])
-                    if models: st.session_state.temp_models = models
+                    with st.spinner("正在呼叫 API 获取模型..."):
+                        success, result = fetch_models(p["base_url"], p["api_key"])
+                        if success:
+                            if result:
+                                st.session_state.temp_models = result
+                                st.success(f"✅ 成功抓取到 {len(result)} 个模型！")
+                            else:
+                                st.warning("⚠️ 请求成功，但该平台未返回任何模型列表。")
+                        else:
+                            st.error(f"❌ 获取失败: {result}")
+                else:
+                    st.error("❌ 请先填写 API Key！")
+                    
         if "temp_models" in st.session_state:
-            sel_m = st.selectbox("选择支持的模型", ["(不覆盖)"] + st.session_state.temp_models)
-            if sel_m != "(不覆盖)": p["model"] = sel_m; del st.session_state.temp_models; save_profiles(); st.rerun()
+            sel_m = st.selectbox("选择支持的模型 (选择后将覆盖当前模型)", ["(不覆盖)"] + st.session_state.temp_models)
+            if sel_m != "(不覆盖)": 
+                p["model"] = sel_m
+                del st.session_state.temp_models
+                save_profiles()
+                st.rerun()
                 
         st.markdown("#### 🎛️ 运行时超参数 (勾选生效)")
         sl1, sl2 = st.columns(2)
