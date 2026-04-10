@@ -448,23 +448,39 @@ with st.sidebar:
                     parts.append(role_name + ":\n" + m['content'] + "\n\n" + "-" * 40 + "\n")  
                 txt_c = "\n".join(parts)  
   
-                        ec1, ec2, ec3 = st.columns(3)  
-            with ec1:  
-                st.download_button("📥 TXT", txt_c.encode('utf-8'), "对话.txt", "text/plain", use_container_width=True)  
-            with ec2:  
-                st.download_button("📥 Word", generate_word_doc(curr_msgs_sb, is_pure), "对话.docx", use_container_width=True)  
-            with ec3:  
-                _chat_for_export = st.session_state.free_chats[st.session_state.current_chat_id]  
-                _export_meta_chat = {  
-                    "source": "\u81ea\u7531\u804a\u5929\u533a",  
-                    "system_prompt": _chat_for_export.get("system_prompt", ""),  
-                    "model": active_p["model"],  
-                    "files": [{"filename": k["filename"], "size": len(k["content"])} for k in _chat_for_export.get("session_knowledge", [])]  
-                }  
-                st.download_button("🎨 HTML", export_to_pretty_html(curr_msgs_sb, chat_title_html, _export_meta_chat), "对话.html", "text/html", use_container_width=True)  
+            chat_title_for_export = st.session_state.free_chats[st.session_state.current_chat_id]["title"]  
+            chat_data_for_export = st.session_state.free_chats[st.session_state.current_chat_id]  
+            _ensure_chat(chat_data_for_export)  
+            export_meta_chat = {  
+                "source": "自由聊天区",  
+                "system_prompt": chat_data_for_export.get("system_prompt", ""),  
+                "model": active_p["model"],  
+                "files": [  
+                    {"filename": k["filename"], "size": len(k["content"])}  
+                    for k in chat_data_for_export.get("session_knowledge", [])  
+                ]  
+            }  
   
+            ec1, ec2, ec3 = st.columns(3)  
+            with ec1:  
+                st.download_button(  
+                    "📥 TXT", txt_c.encode('utf-8'), "对话.txt",  
+                    "text/plain", use_container_width=True  
+                )  
+            with ec2:  
+                st.download_button(  
+                    "📥 Word", generate_word_doc(curr_msgs_sb, is_pure), "对话.docx",  
+                    use_container_width=True  
+                )  
+            with ec3:  
+                st.download_button(  
+                    "🎨 HTML",  
+                    export_to_pretty_html(curr_msgs_sb, chat_title_for_export, export_meta_chat),  
+                    "对话.html", "text/html", use_container_width=True  
+                )  
+  
+        # 删除对话（二次确认）  
         if st.session_state.get("_confirm_del_chat"):  
-
             st.error("确认删除此对话？不可撤回！")  
             dcc1, dcc2 = st.columns(2)  
             if dcc1.button("✅ 确认", key="yes_del_chat"):  
@@ -525,6 +541,7 @@ with st.sidebar:
                 st.rerun()  
             except Exception as e:  
                 st.error("导入失败: " + str(e))  
+
   
 # ==========================================  
 # 模块 1: 自动化流水线  
@@ -671,20 +688,22 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     "✨ 纯享TXT", pure_text.encode('utf-8'),  
                     engine['topic'] + "_纯正文.txt", use_container_width=True  
                 )  
-            with ec3:  
+                        with ec3:  
                 _sop_for_export = st.session_state.sops.get(engine["sop_name"], {})  
-_export_meta_auto = {  
-    "source": "\u81ea\u52a8\u5316\u6d41\u6c34\u7ebf",  
-    "topic": engine["topic"],  
-    "sop_name": engine["sop_name"],  
-    "system_prompt": _sop_for_export.get("system_prompt", ""),  
-    "model": active_p["model"],  
-    "global_file_name": "(\u5df2\u6302\u8f7d)" if engine.get("global_file") else ""  
-}  
-st.download_button(  
-    "🎨 精美HTML", export_to_pretty_html(engine["messages"], engine["topic"], _export_meta_auto),  
-    engine['topic'] + ".html", "text/html", use_container_width=True  
-)  
+                _export_meta_auto = {  
+                    "source": "自动化流水线",  
+                    "topic": engine["topic"],  
+                    "sop_name": engine["sop_name"],  
+                    "system_prompt": _sop_for_export.get("system_prompt", ""),  
+                    "model": active_p["model"],  
+                    "global_file_name": "(已挂载)" if engine.get("global_file") else ""  
+                }  
+                st.download_button(  
+                    "🎨 精美HTML",  
+                    export_to_pretty_html(engine["messages"], engine["topic"], _export_meta_auto),  
+                    engine['topic'] + ".html", "text/html", use_container_width=True  
+                )  
+
 
   
             # 字数精控报告  
