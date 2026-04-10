@@ -580,12 +580,10 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     " | 矫正第" + str(engine['correction_count']) + "轮"  
                 )  
                 st.caption(info_str)  
-  
                 ai_msgs_running = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]  
                 if ai_msgs_running:  
                     total_wc_run = sum(count_words(m["content"]) for m in ai_msgs_running)  
                     st.metric("📊 已生成总字数", "{:,}".format(total_wc_run))  
-  
                 cp1, cp2 = st.columns(2)  
                 if cp1.button("⏸️ 暂停", use_container_width=True):  
                     engine["is_paused"] = True  
@@ -600,7 +598,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
             sel_sop = st.selectbox("1. 挂载执行 SOP (账号人设)", list(st.session_state.sops.keys()))  
             in_topic = st.text_input("2. 注入 {主题}", placeholder="例如：赛博朋克修仙传")  
             up_file = st.file_uploader("3. 挂载全局设定集 (可选)", type=['txt', 'md'])  
-  
             if st.button("🚀 点火启动", type="primary", use_container_width=True):  
                 if not active_p["api_key"]:  
                     st.error("引擎未配置 API Key！")  
@@ -619,9 +616,8 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     })  
                     st.rerun()  
   
-        # === 成果验收区 ===  
         st.divider()  
-                if engine["messages"]:  
+        if engine["messages"]:  
             st.markdown("### 📦 成果验收与记忆管理")  
             sel_msgs = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]  
             raw_text = "\n\n".join([m["content"] for m in sel_msgs])  
@@ -632,7 +628,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
             if not engine["is_running"]:  
                 sop_data = st.session_state.sops.get(engine["sop_name"], {})  
                 mem_mode = sop_data.get("memory_mode", "manual")  
-  
                 if mem_mode == "manual":  
                     st.caption("🧠 记忆模式：手动提取蒸馏")  
                     if st.button("💾 存入该账号记忆保险库", type="primary", use_container_width=True):  
@@ -677,7 +672,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             else:  
                                 st.toast("反馈已记录！", icon="✅")  
   
-            # 三个导出按钮  
             btn_c1, btn_c2, btn_c3 = st.columns(3)  
             with btn_c1:  
                 st.download_button(  
@@ -711,18 +705,14 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     use_container_width=True  
                 )  
   
-            # 字数精控报告  
             if engine["word_count_log"]:  
                 with st.expander("📊 字数精控报告", expanded=False):  
                     total_actual = sum(w["actual"] for w in engine["word_count_log"])  
                     total_target = sum(w["target"] for w in engine["word_count_log"])  
-                    if engine["word_count_log"]:  
-                        avg_dev = sum(  
-                            abs(w["actual"] - w["target"]) / max(w["target"], 1)  
-                            for w in engine["word_count_log"]  
-                        ) / len(engine["word_count_log"])  
-                    else:  
-                        avg_dev = 0  
+                    avg_dev = sum(  
+                        abs(w["actual"] - w["target"]) / max(w["target"], 1)  
+                        for w in engine["word_count_log"]  
+                    ) / len(engine["word_count_log"]) if engine["word_count_log"] else 0  
                     st.markdown(  
                         "**合计**: {:,} / 目标 {:,} | **平均偏差**: {:.1%}".format(  
                             total_actual, total_target, avg_dev  
@@ -742,7 +732,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                         )  
                     st.markdown(header + rows)  
   
-            # 清理工作台（二次确认）  
             if st.session_state.get("_confirm_clear"):  
                 st.error("确认清理？所有生成内容将丢失！")  
                 clc1, clc2 = st.columns(2)  
@@ -760,9 +749,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                 if st.button("🧹 清理工作台", use_container_width=True):  
                     st.session_state._confirm_clear = True  
                     st.rerun()  
-
   
-    # === 监视大屏 ===  
     with col_view:  
         st.header("🖥️ 监视大屏")  
         with st.container(height=750, border=True):  
@@ -782,7 +769,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             "☑️ 选中导出", msg.get("selected", True), key="ac_" + str(i)  
                         )  
   
-            # === 核心执行引擎 ===  
             if engine["is_running"] and not engine.get("is_paused", False):  
                 client, profile = get_client()  
                 sop_data = st.session_state.sops[engine["sop_name"]]  
@@ -801,7 +787,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     )  
                 engine["pending_instruction"] = ""  
   
-                # 字数精控：预注入  
                 wc_enabled = curr_step.get("enable_word_control", False) and curr_step.get("target_words", 0) > 0  
                 word_injection = ""  
                 if wc_enabled and engine["correction_count"] == 0:  
@@ -813,14 +798,13 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             target_adj = int(curr_step["target_words"] / bias)  
                     word_injection = "\n\n【本章字数要求：严格控制在 " + str(target_adj) + " 字左右】"  
   
-                silence = '\n\n【系统强制指令：不要重复上文，不准说好的、收到等废话，不准带章节标题，直接从正文第一个字开始！】'  
+                silence = '\n\n【系统强制指令：不要重复上文，不准说好的收到等废话，不准带章节标题，直接从正文第一个字开始！】'  
                 final_prompt = current_prompt + word_injection + silence  
   
                 engine["messages"].append({"role": "user", "content": current_prompt, "selected": False})  
                 with st.chat_message("user"):  
                     st.markdown("*(⚡ 指令)*: " + current_prompt)  
   
-                # 构建 API 消息包（知识置顶，最大化缓存命中）  
                 api_msgs = []  
                 sys_prompt = sop_data.get("system_prompt", "").strip()  
                 if sys_prompt:  
@@ -857,12 +841,10 @@ if st.session_state.current_page == "🤖 自动化流水线":
   
                         hit_trigger = False  
   
-                        # === 字数精控闸门 ===  
                         if wc_enabled:  
                             target = curr_step["target_words"]  
                             tol = curr_step.get("word_tolerance", 5) / 100.0  
                             deviation = (wc_actual - target) / max(target, 1)  
-  
                             if abs(deviation) > tol:  
                                 max_corr = curr_step.get("max_corrections", 2)  
                                 if engine["correction_count"] < max_corr:  
@@ -898,12 +880,10 @@ if st.session_state.current_page == "🤖 自动化流水线":
                                     "✅ " + str(wc_actual) + "字 (目标" + str(target) + "字)"  
                                 )  
   
-                        # === length 中断续写 ===  
                         if not hit_trigger and engine["last_finish_reason"] == "length":  
                             engine["pending_instruction"] = "⚠️ 因字数限制中断，请紧接上文最后一个字继续往下写。"  
                             hit_trigger = True  
   
-                        # === 触发器检测 ===  
                         if not hit_trigger:  
                             for t in triggers:  
                                 if t.get("keyword") and t["keyword"] in full_resp:  
@@ -917,7 +897,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                                         hit_trigger = True  
                                         break  
   
-                        # === 正常推进 ===  
                         if not hit_trigger:  
                             if wc_enabled:  
                                 engine["word_count_log"].append({  
@@ -931,7 +910,6 @@ if st.session_state.current_page == "🤖 自动化流水线":
                                     wc_actual / max(curr_step["target_words"], 1)  
                                 )  
                             engine["correction_count"] = 0  
-  
                             if engine["current_loop_idx"] < curr_step.get("loop", 1):  
                                 engine["current_loop_idx"] += 1  
                             else:  
@@ -944,6 +922,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     except Exception as e:  
                         st.error("引擎故障: " + str(e))  
                         engine["is_running"] = False  
+  
   
 # ==========================================  
 # 模块 2: 自由聊天区 (知识库常驻 + 重新生成 + 编辑)  
