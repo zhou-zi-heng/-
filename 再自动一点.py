@@ -621,7 +621,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
   
         # === 成果验收区 ===  
         st.divider()  
-        if engine["messages"]:  
+                if engine["messages"]:  
             st.markdown("### 📦 成果验收与记忆管理")  
             sel_msgs = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]  
             raw_text = "\n\n".join([m["content"] for m in sel_msgs])  
@@ -677,35 +677,39 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             else:  
                                 st.toast("反馈已记录！", icon="✅")  
   
-                        ec1, ec2, ec3 = st.columns(3)  
-            with ec1:  
+            # 三个导出按钮  
+            btn_c1, btn_c2, btn_c3 = st.columns(3)  
+            with btn_c1:  
                 st.download_button(  
-                    "📥 全文TXT", raw_text.encode('utf-8'),  
-                    engine['topic'] + "_完整.txt", use_container_width=True  
+                    "📥 全文TXT",  
+                    raw_text.encode('utf-8'),  
+                    engine['topic'] + "_完整.txt",  
+                    use_container_width=True  
                 )  
-            with ec2:  
+            with btn_c2:  
                 st.download_button(  
-                    "✨ 纯享TXT", pure_text.encode('utf-8'),  
-                    engine['topic'] + "_纯正文.txt", use_container_width=True  
+                    "✨ 纯享TXT",  
+                    pure_text.encode('utf-8'),  
+                    engine['topic'] + "_纯正文.txt",  
+                    use_container_width=True  
                 )  
-            with ec3:  
-                _sop_for_export = st.session_state.sops.get(engine["sop_name"], {})  
-                _export_meta_auto = {  
+            with btn_c3:  
+                _sop_exp = st.session_state.sops.get(engine["sop_name"], {})  
+                _meta_auto = {  
                     "source": "自动化流水线",  
                     "topic": engine["topic"],  
                     "sop_name": engine["sop_name"],  
-                    "system_prompt": _sop_for_export.get("system_prompt", ""),  
+                    "system_prompt": _sop_exp.get("system_prompt", ""),  
                     "model": active_p["model"],  
                     "global_file_name": "(已挂载)" if engine.get("global_file") else ""  
                 }  
                 st.download_button(  
                     "🎨 精美HTML",  
-                    export_to_pretty_html(engine["messages"], engine["topic"], _export_meta_auto),  
-                    engine['topic'] + ".html", "text/html", use_container_width=True  
+                    export_to_pretty_html(engine["messages"], engine["topic"], _meta_auto),  
+                    engine['topic'] + ".html",  
+                    "text/html",  
+                    use_container_width=True  
                 )  
-
-
-
   
             # 字数精控报告  
             if engine["word_count_log"]:  
@@ -756,6 +760,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                 if st.button("🧹 清理工作台", use_container_width=True):  
                     st.session_state._confirm_clear = True  
                     st.rerun()  
+
   
     # === 监视大屏 ===  
     with col_view:  
