@@ -137,28 +137,134 @@ def generate_word_doc(messages, is_pure=False):
     return bio.getvalue()  
   
 def export_to_pretty_html(messages, title):  
-    css = (  
-        "body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.8;"  
-        "color:#333;max-width:800px;margin:40px auto;padding:20px;background:#f9f9f9}"  
-        ".container{background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.05)}"  
-        "h1{text-align:center;color:#2c3e50;border-bottom:2px solid #eee;padding-bottom:20px}"  
-        ".chapter{margin-bottom:40px;white-space:pre-wrap}"  
-        ".meta{font-size:12px;color:#999;text-align:center;margin-bottom:50px}"  
-        ".footer{text-align:center;font-size:12px;color:#ccc;margin-top:60px;border-top:1px solid #eee;padding-top:20px}"  
-    )  
-    parts = ""  
+    css = """  
+    * { margin:0; padding:0; box-sizing:border-box; }  
+    body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif; background:#f0f2f5; color:#1a1a1a; }  
+    .header { background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:#fff; padding:24px 32px; position:sticky; top:0; z-index:100; box-shadow:0 2px 12px rgba(0,0,0,.15); }  
+    .header h1 { font-size:22px; font-weight:700; }  
+    .header .meta { font-size:12px; opacity:.75; margin-top:6px; }  
+    .chat-container { max-width:860px; margin:0 auto; padding:24px 16px 80px; }  
+    .msg { display:flex; gap:12px; margin-bottom:24px; align-items:flex-start; }  
+    .msg.user { flex-direction:row-reverse; }  
+    .avatar { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }  
+    .msg.ai .avatar { background:#e8f5e9; }  
+    .msg.user .avatar { background:#e3f2fd; }  
+    .bubble { max-width:75%; padding:14px 18px; border-radius:16px; line-height:1.8; font-size:15px; word-wrap:break-word; white-space:pre-wrap; box-shadow:0 1px 3px rgba(0,0,0,.06); }  
+    .msg.ai .bubble { background:#fff; border-top-left-radius:4px; }  
+    .msg.user .bubble { background:#d1e7ff; border-top-right-radius:4px; }  
+    .bubble p { margin-bottom:10px; }  
+    .bubble p:last-child { margin-bottom:0; }  
+    .bubble ul, .bubble ol { padding-left:20px; margin:8px 0; }  
+    .bubble li { margin-bottom:4px; }  
+    .bubble code { background:#f5f5f5; padding:2px 6px; border-radius:4px; font-size:13px; font-family:'Fira Code',Consolas,monospace; }  
+    .bubble pre { background:#f5f5f5; padding:12px; border-radius:8px; overflow-x:auto; margin:10px 0; }  
+    .bubble pre code { background:none; padding:0; }  
+    .bubble strong, .bubble b { font-weight:600; }  
+    .bubble h1,.bubble h2,.bubble h3 { font-weight:700; margin:12px 0 8px; }  
+    .bubble h1 { font-size:20px; } .bubble h2 { font-size:17px; } .bubble h3 { font-size:15px; }  
+    .bubble blockquote { border-left:3px solid #ccc; padding-left:12px; color:#666; margin:8px 0; }  
+    .bubble table { border-collapse:collapse; margin:10px 0; font-size:14px; }  
+    .bubble th, .bubble td { border:1px solid #ddd; padding:6px 10px; text-align:left; }  
+    .bubble th { background:#f9f9f9; font-weight:600; }  
+    .word-count { font-size:11px; color:#999; margin-top:6px; text-align:right; }  
+    .msg.user .word-count { text-align:left; }  
+    .footer { text-align:center; padding:32px; font-size:12px; color:#aaa; border-top:1px solid #e5e5e5; max-width:860px; margin:0 auto; }  
+    .copy-btn { display:inline-block; margin-top:8px; padding:4px 12px; font-size:12px; color:#888; border:1px solid #ddd; border-radius:6px; cursor:pointer; background:#fff; transition:.2s; }  
+    .copy-btn:hover { color:#4CAF50; border-color:#4CAF50; background:#f0f9f0; }  
+    @media(max-width:600px) { .bubble { max-width:88%; font-size:14px; } .header h1 { font-size:18px; } }  
+    @media print { .header{position:relative;} .copy-btn{display:none;} }  
+    """  
+  
+    # Simple markdown-to-html converter  
+    js = """  
+    <script>  
+    function copyText(btn, id) {  
+        var el = document.getElementById(id);  
+        var text = el.innerText || el.textContent;  
+        navigator.clipboard.writeText(text).then(function(){  
+            btn.innerText='\\u2705 \\u5df2\\u590d\\u5236';  
+            btn.style.color='#4CAF50';  
+            setTimeout(function(){ btn.innerText='\\ud83d\\udccb \\u590d\\u5236\\u6587\\u672c'; btn.style.color='#888'; },2000);  
+        });  
+    }  
+    </script>  
+    """  
+  
+    msg_html = ""  
+    msg_idx = 0  
     for m in messages:  
-        if m["role"] == "assistant" and m.get("selected", True):  
-            parts += "<div class='chapter'>" + clean_novel_text(m["content"]) + "</div>"  
-    date_str = datetime.now().strftime('%Y-%m-%d')  
-    html_out = (  
-        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + title + "</title>"  
-        "<style>" + css + "</style></head><body><div class='container'><h1>" + title + "</h1>"  
-        "<div class='meta'>ZenMux 创作者工作站 | " + date_str + "</div>"  
-        + parts +  
-        "<div class='footer'>AI 全自动流水线驱动</div></div></body></html>"  
+        if m["role"] == "system":  
+            continue  
+        is_user = m["role"] == "user"  
+        role_class = "user" if is_user else "ai"  
+        avatar = "🙋" if is_user else "🤖"  
+        content = m["content"]  
+  
+        # Basic markdown conversion  
+        import html as html_mod  
+        safe = html_mod.escape(content)  
+        # Bold  
+        safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe)  
+        # Inline code  
+        safe = re.sub(r'`([^`]+)`', r'<code>\1</code>', safe)  
+        # Headers  
+        safe = re.sub(r'^### (.+)$', r'<h3>\1</h3>', safe, flags=re.MULTILINE)  
+        safe = re.sub(r'^## (.+)$', r'<h2>\1</h2>', safe, flags=re.MULTILINE)  
+        safe = re.sub(r'^# (.+)$', r'<h1>\1</h1>', safe, flags=re.MULTILINE)  
+        # Lists  
+        safe = re.sub(r'^\- (.+)$', r'<li>\1</li>', safe, flags=re.MULTILINE)  
+        safe = re.sub(r'((?:<li>.*</li>\n?)+)', r'<ul>\1</ul>', safe)  
+        # Numbered lists  
+        safe = re.sub(r'^\d+\.\s+(.+)$', r'<li>\1</li>', safe, flags=re.MULTILINE)  
+        # Paragraphs  
+        safe = re.sub(r'\n\n+', '</p><p>', safe)  
+        safe = '<p>' + safe + '</p>'  
+        safe = safe.replace('\n', '<br>')  
+  
+        wc = count_words(content)  
+        block_id = "block_" + str(msg_idx)  
+  
+        copy_html = ""  
+        if not is_user:  
+            copy_html = (  
+                '<button class="copy-btn" onclick="copyText(this,\'' + block_id + '\')">'  
+                '\U0001f4cb \u590d\u5236\u6587\u672c</button>'  
+            )  
+  
+        msg_html += (  
+            '<div class="msg ' + role_class + '">'  
+            '<div class="avatar">' + avatar + '</div>'  
+            '<div>'  
+            '<div class="bubble" id="' + block_id + '">' + safe + '</div>'  
+            '<div class="word-count">' + str(wc) + ' \u5b57' + '</div>'  
+            + copy_html +  
+            '</div></div>'  
+        )  
+        msg_idx += 1  
+  
+    date_str = datetime.now().strftime('%Y-%m-%d %H:%M')  
+    total_ai_words = sum(count_words(m["content"]) for m in messages if m["role"] == "assistant")  
+    total_msgs = sum(1 for m in messages if m["role"] != "system")  
+  
+    full_html = (  
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'  
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'  
+        '<title>' + title + '</title>'  
+        '<style>' + css + '</style></head><body>'  
+        '<div class="header">'  
+        '<h1>\U0001f4ac ' + title + '</h1>'  
+        '<div class="meta">' + date_str + ' | '  
+        + str(total_msgs) + ' \u6761\u6d88\u606f | AI \u5171 '  
+        + '{:,}'.format(total_ai_words) + ' \u5b57 | '  
+        'ZenMux \u521b\u4f5c\u8005\u5de5\u4f5c\u7ad9</div>'  
+        '</div>'  
+        '<div class="chat-container">' + msg_html + '</div>'  
+        '<div class="footer">'  
+        '\u7531 ZenMux AI \u521b\u4f5c\u8005\u5168\u81ea\u52a8\u6d41\u6c34\u7ebf\u9a71\u52a8'  
+        '</div>' + js + '</body></html>'  
     )  
-    return html_out.encode('utf-8')  
+    return full_html.encode('utf-8')  
+
   
 def fetch_models(base_url, api_key):  
     try:  
