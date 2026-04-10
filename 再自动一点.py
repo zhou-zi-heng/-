@@ -677,7 +677,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             else:  
                                 st.toast("反馈已记录！", icon="✅")  
   
-            ec1, ec2, ec3 = st.columns(3)  
+                        ec1, ec2, ec3 = st.columns(3)  
             with ec1:  
                 st.download_button(  
                     "📥 全文TXT", raw_text.encode('utf-8'),  
@@ -688,7 +688,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     "✨ 纯享TXT", pure_text.encode('utf-8'),  
                     engine['topic'] + "_纯正文.txt", use_container_width=True  
                 )  
-                        with ec3:  
+            with ec3:  
                 _sop_for_export = st.session_state.sops.get(engine["sop_name"], {})  
                 _export_meta_auto = {  
                     "source": "自动化流水线",  
@@ -703,6 +703,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     export_to_pretty_html(engine["messages"], engine["topic"], _export_meta_auto),  
                     engine['topic'] + ".html", "text/html", use_container_width=True  
                 )  
+
 
 
   
