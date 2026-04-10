@@ -1007,7 +1007,7 @@ elif st.session_state.current_page == "💬 自由聊天区":
                             save_free_chats()  
                             st.rerun()  
   
-    # === 发送逻辑 ===  
+        # === 发送逻辑 ===  
     need_resend = st.session_state.pop("_auto_resend", False)  
     prompt = st.chat_input("输入消息...")  
   
@@ -1020,6 +1020,11 @@ elif st.session_state.current_page == "💬 自由聊天区":
             if len(curr_chat["messages"]) == 0:  
                 curr_chat["title"] = prompt[:10] + "..."  
             curr_chat["messages"].append({"role": "user", "content": prompt})  
+  
+        # ★ 立即渲染用户消息气泡（修复延迟显示问题）  
+        if prompt:  
+            with st.chat_message("user"):  
+                st.markdown(prompt)  
   
         # 构建 API 消息包（知识置顶，最大化缓存命中）  
         api_msgs = []  
@@ -1052,6 +1057,7 @@ elif st.session_state.current_page == "💬 自由聊天区":
                 st.rerun()  
             except Exception as e:  
                 st.error("请求失败: " + str(e))  
+  
   
 # ==========================================  
 # 模块 3: SOP与灵魂  
