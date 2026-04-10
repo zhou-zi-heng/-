@@ -69,13 +69,17 @@ def _default_step():
     return {"prompt": "", "loop": 1, "reference": "", "enable_word_control": False, "target_words": 0, "word_tolerance": 5, "max_corrections": 2}  
   
 def _ensure_step(s):  
-    for k, v in _default_step().items():  
-        s.setdefault(k, v)  
+    d = _default_step()  
+    for k, v in d.items():  
+        if k not in s:  
+            s[k] = v  
     return s  
   
 def _ensure_chat(c):  
-    c.setdefault("session_knowledge", [])  
-    c.setdefault("system_prompt", "")  
+    if "session_knowledge" not in c:  
+        c["session_knowledge"] = []  
+    if "system_prompt" not in c:  
+        c["system_prompt"] = ""  
     return c  
   
 # ==========================================  
@@ -84,13 +88,23 @@ def _ensure_chat(c):
 def render_copy_button(text):  
     b64 = base64.b64encode(text.encode("utf-8")).decode("utf-8")  
     uid = uuid.uuid4().hex[:8]  
-    html = f"""<div style="display:flex;justify-content:flex-end;padding-right:10px;">  
-    <button id="cb{uid}" onclick="(function(b){{navigator.clipboard.writeText(decodeURIComponent(escape(atob('{b64}')))).then(()=>{{b.innerText='✅ 已复制';b.style.color='#4CAF50';setTimeout(()=>{{b.innerText='📋 复制';b.style.color='#aaa';}},2000);}})}})(this)"  
-    style="border:none;background:transparent;color:#aaa;cursor:pointer;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px;">📋 复制</button></div>"""  
+    html = (  
+        '<div style="display:flex;justify-content:flex-end;padding-right:10px;">'  
+        '<button id="cb' + uid + '" onclick="(function(b){navigator.clipboard.writeText('  
+        "decodeURIComponent(escape(atob('" + b64 + "')))).then(function(){"  
+        "b.innerText='\\u2705 \\u5df2\\u590d\\u5236';b.style.color='#4CAF50';"  
+        "setTimeout(function(){b.innerText='\\ud83d\\udccb \\u590d\\u5236';b.style.color='#aaa';},2000);"  
+        '})})(this)" '  
+        'style="border:none;background:transparent;color:#aaa;cursor:pointer;font-size:12px;'  
+        'font-weight:bold;padding:5px 10px;border-radius:6px;">📋 复制</button></div>'  
+    )  
     components.html(html, height=30)  
   
 def clean_novel_text(text):  
-    text = re.sub(r'^\s*(好的|没问题|非常荣幸|收到|为你生成|以下是|这是为您|正文开始|下面是).*?[:：]\n*', '', text, flags=re.MULTILINE|re.IGNORECASE)  
+    text = re.sub(  
+        r'^\s*(好的|没问题|非常荣幸|收到|为你生成|以下是|这是为您|正文开始|下面是).*?[:：]\n*',  
+        '', text, flags=re.MULTILINE | re.IGNORECASE  
+    )  
     text = re.sub(r'^\s*第[零一二三四五六七八九十百千0-9]+[章回节卷].*?\n', '', text, flags=re.MULTILINE)  
     text = re.sub(r'```[a-zA-Z]*\n?', '', text)  
     text = re.sub(r'\n*(希望这|如果有需要|请告诉我|期待您的反馈).*$', '', text, flags=re.IGNORECASE)  
@@ -98,45 +112,80 @@ def clean_novel_text(text):
     return text.strip()  
   
 def count_words(text):  
-    return len(re.findall(r'[\u4e00-\u9fff]', text)) + len(re.findall(r'[a-zA-Z]+', text))  
+    chinese = len(re.findall(r'[\u4e00-\u9fff]', text))  
+    english = len(re.findall(r'[a-zA-Z]+', text))  
+    return chinese + english  
   
 def generate_word_doc(messages, is_pure=False):  
     doc = Document()  
     doc.add_heading('AI 创作者工作站生成文档', 0)  
     for msg in messages:  
-        if msg["role"] == "system" or not msg.get("selected", True): continue  
+        if msg["role"] == "system" or not msg.get("selected", True):  
+            continue  
         if is_pure:  
-            if msg["role"] == "assistant": doc.add_paragraph(clean_novel_text(msg["content"]))  
+            if msg["role"] == "assistant":  
+                doc.add_paragraph(clean_novel_text(msg["content"]))  
         else:  
             if msg["role"] == "user":  
-                doc.add_heading("📌 指令", level=2); doc.add_paragraph(msg["content"])  
+                doc.add_heading("📌 指令", level=2)  
+                doc.add_paragraph(msg["content"])  
             elif msg["role"] == "assistant":  
-                doc.add_heading("🤖 AI", level=2); doc.add_paragraph(msg["content"])  
-    bio = io.BytesIO(); doc.save(bio); return bio.getvalue()  
+                doc.add_heading("🤖 AI", level=2)  
+                doc.add_paragraph(msg["content"])  
+    bio = io.BytesIO()  
+    doc.save(bio)  
+    return bio.getvalue()  
   
 def export_to_pretty_html(messages, title):  
-    css = "body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.8;color:#333;max-width:800px;margin:40px auto;padding:20px;background:#f9f9f9}.container{background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.05)}h1{text-align:center;color:#2c3e50;border-bottom:2px solid #eee;padding-bottom:20px}.chapter{margin-bottom:40px;white-space:pre-wrap}.meta{font-size:12px;color:#999;text-align:center;margin-bottom:50px}.footer{text-align:center;font-size:12px;color:#ccc;margin-top:60px;border-top:1px solid #eee;padding-top:20px}"  
-    parts = "".join([f"<div class='chapter'>{clean_novel_text(m['content'])}</div>" for m in messages if m["role"]=="assistant" and m.get("selected", True)])  
-    return f"<!DOCTYPE html><html><head><meta charset='utf-8'><title>{title}</title><style>{css}</style></head><body><div class='container'><h1>{title}</h1><div class='meta'>ZenMux 创作者工作站 | {datetime.now().strftime('%Y-%m-%d')}</div>{parts}<div class='footer'>AI 全自动流水线驱动</div></div></body></html>".encode('utf-8')  
+    css = (  
+        "body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.8;"  
+        "color:#333;max-width:800px;margin:40px auto;padding:20px;background:#f9f9f9}"  
+        ".container{background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.05)}"  
+        "h1{text-align:center;color:#2c3e50;border-bottom:2px solid #eee;padding-bottom:20px}"  
+        ".chapter{margin-bottom:40px;white-space:pre-wrap}"  
+        ".meta{font-size:12px;color:#999;text-align:center;margin-bottom:50px}"  
+        ".footer{text-align:center;font-size:12px;color:#ccc;margin-top:60px;border-top:1px solid #eee;padding-top:20px}"  
+    )  
+    parts = ""  
+    for m in messages:  
+        if m["role"] == "assistant" and m.get("selected", True):  
+            parts += "<div class='chapter'>" + clean_novel_text(m["content"]) + "</div>"  
+    date_str = datetime.now().strftime('%Y-%m-%d')  
+    html_out = (  
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + title + "</title>"  
+        "<style>" + css + "</style></head><body><div class='container'><h1>" + title + "</h1>"  
+        "<div class='meta'>ZenMux 创作者工作站 | " + date_str + "</div>"  
+        + parts +  
+        "<div class='footer'>AI 全自动流水线驱动</div></div></body></html>"  
+    )  
+    return html_out.encode('utf-8')  
   
 def fetch_models(base_url, api_key):  
     try:  
         url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"  
-        resp = requests.get(url, headers={"Authorization": f"Bearer {api_key.strip()}"}, timeout=8)  
-        if resp.status_code == 200: return True, sorted([m["id"] for m in resp.json().get("data", [])])  
-        else: return False, f"状态码 {resp.status_code}: {resp.text[:100]}"  
-    except Exception as e: return False, str(e)  
+        resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)  
+        if resp.status_code == 200:  
+            return True, sorted([m["id"] for m in resp.json().get("data", [])])  
+        else:  
+            return False, "状态码 " + str(resp.status_code) + ": " + resp.text[:100]  
+    except Exception as e:  
+        return False, str(e)  
   
 def get_client():  
     p = st.session_state.profiles[st.session_state.active_profile_idx]  
-    return OpenAI(base_url=p["base_url"].strip() or "https://api.openai.com/v1", api_key=p["api_key"].strip()), p  
+    url = p["base_url"].strip() or "https://api.openai.com/v1"  
+    return OpenAI(base_url=url, api_key=p["api_key"].strip()), p  
   
 def build_api_kwargs(profile, api_msgs):  
     kw = {"model": profile["model"], "messages": api_msgs, "stream": True}  
-    if profile.get("use_temperature", True): kw["temperature"] = profile.get("temperature", 0.7)  
-    if profile.get("use_max_tokens", True): kw["max_tokens"] = profile.get("max_tokens", 4096)  
-    if profile.get("use_top_p", False): kw["top_p"] = profile.get("top_p", 1.0)  
-    if profile.get("use_frequency_penalty", False): kw["frequency_penalty"] = profile.get("frequency_penalty", 0.0)  
+    if profile.get("use_temperature", True):  
+        kw["temperature"] = profile.get("temperature", 0.7)  
+    if profile.get("use_max_tokens", True):  
+        kw["max_tokens"] = profile.get("max_tokens", 4096)  
+    if profile.get("use_top_p", False):  
+        kw["top_p"] = profile.get("top_p", 1.0)  
+    if profile.get("use_frequency_penalty", False):  
+        kw["frequency_penalty"] = profile.get("frequency_penalty", 0.0)  
     return kw  
   
 def stream_generator(api_stream):  
@@ -146,30 +195,39 @@ def stream_generator(api_stream):
             yield chunk.choices[0].delta.content  
         if chunk.choices and chunk.choices[0].finish_reason is not None:  
             st.session_state.auto_engine["last_finish_reason"] = chunk.choices[0].finish_reason  
+  
 # ==========================================  
 # 5. 状态初始化 (完整私有沙盒)  
 # ==========================================  
 if "initialized" not in st.session_state:  
     st.session_state.profiles = [{  
-        "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-sonnet-4.6",  
-        "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,  
-        "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0  
+        "name": "默认引擎", "base_url": "", "api_key": "",  
+        "model": "anthropic/claude-sonnet-4.6",  
+        "use_temperature": True, "temperature": 0.8,  
+        "use_max_tokens": True, "max_tokens": 4096,  
+        "use_top_p": False, "top_p": 1.0,  
+        "use_frequency_penalty": False, "frequency_penalty": 0.0  
     }]  
+    default_step = _default_step()  
+    default_step["prompt"] = "撰写第【{循环索引}】章"  
+    default_step["loop"] = 2  
     st.session_state.sops = {  
         "小说账号预设": {  
             "memory_mode": "manual",  
             "system_prompt": "你是一名悬疑小说家，文风冷峻，绝不输出废话。",  
             "negative_memory": [],  
-            "steps": [_default_step() | {"prompt": "撰写第【{循环索引}】章", "loop": 2}],  
+            "steps": [default_step],  
             "triggers": [{"type": "terminate", "keyword": "全文完", "action": ""}]  
         }  
     }  
     st.session_state.memory = {}  
-    first_chat_id = str(uuid.uuid4())  
-    st.session_state.free_chats = {first_chat_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}}  
+    first_id = str(uuid.uuid4())  
+    st.session_state.free_chats = {  
+        first_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}  
+    }  
     st.session_state.active_profile_idx = 0  
     st.session_state.current_page = "🤖 自动化流水线"  
-    st.session_state.current_chat_id = first_chat_id  
+    st.session_state.current_chat_id = first_id  
     st.session_state.auto_engine = {  
         "is_running": False, "is_paused": False, "is_finished": False, "messages": [],  
         "sop_name": "", "topic": "", "global_file": "",  
@@ -185,80 +243,106 @@ if "initialized" not in st.session_state:
 # ==========================================  
 with st.sidebar:  
     col_img, col_txt = st.columns([1, 3])  
-    with col_img: st.image("https://api.iconify.design/fluent-emoji:octopus.svg?width=80", width=45)  
-    with col_txt: st.header("控制中枢")  
+    with col_img:  
+        st.image("https://api.iconify.design/fluent-emoji:octopus.svg?width=80", width=45)  
+    with col_txt:  
+        st.header("控制中枢")  
   
-    # 未备份提醒  
     if st.session_state.get("_unsaved", 0) > 3:  
-        st.warning(f"⚠️ 有 {st.session_state._unsaved} 项未备份更改，建议导出快照！")  
+        st.warning("⚠️ 有 " + str(st.session_state._unsaved) + " 项未备份更改，建议导出快照！")  
   
     st.write("")  
     pages = ["🤖 自动化流水线", "💬 自由聊天区", "📝 账号SOP与灵魂", "⚙️ 底层引擎配置"]  
-    for p in pages:  
-        if st.button(p, use_container_width=True, type="primary" if st.session_state.current_page == p else "secondary"):  
-            st.session_state.current_page = p; st.rerun()  
+    for pg in pages:  
+        btype = "primary" if st.session_state.current_page == pg else "secondary"  
+        if st.button(pg, use_container_width=True, type=btype):  
+            st.session_state.current_page = pg  
+            st.rerun()  
   
     active_p = st.session_state.profiles[st.session_state.active_profile_idx]  
     st.divider()  
-    st.caption(f"🟢 **当前挂载**: {active_p['name']}\n🧠 **模型**: {active_p['model']}")  
+    st.caption("🟢 **当前挂载**: " + active_p['name'] + "\n🧠 **模型**: " + active_p['model'])  
   
-    # 自由聊天区侧边栏扩展  
+    # === 自由聊天区侧边栏 ===  
     if st.session_state.current_page == "💬 自由聊天区":  
         st.divider()  
         st.header("📚 历史对话")  
         if st.button("➕ 开启新对话", use_container_width=True, type="primary"):  
             nid = str(uuid.uuid4())  
-            st.session_state.free_chats[nid] = {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}  
-            st.session_state.current_chat_id = nid; save_free_chats(); st.rerun()  
+            st.session_state.free_chats[nid] = {  
+                "title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""  
+            }  
+            st.session_state.current_chat_id = nid  
+            save_free_chats()  
+            st.rerun()  
   
         for c_id, c_data in reversed(list(st.session_state.free_chats.items())):  
             _ensure_chat(c_data)  
-            c_title = c_data["title"][:12] + ("..." if len(c_data["title"]) > 12 else "")  
-            lbl = f"⭐ {c_title}" if c_id == st.session_state.current_chat_id else f"📄 {c_title}"  
-            if st.button(lbl, key=f"chat_{c_id}", use_container_width=True):  
-                st.session_state.current_chat_id = c_id; st.rerun()  
+            t = c_data["title"]  
+            c_title = t[:12] + "..." if len(t) > 12 else t  
+            lbl = ("⭐ " if c_id == st.session_state.current_chat_id else "📄 ") + c_title  
+            if st.button(lbl, key="chat_" + c_id, use_container_width=True):  
+                st.session_state.current_chat_id = c_id  
+                st.rerun()  
   
         st.divider()  
-        curr_msgs_sidebar = st.session_state.free_chats[st.session_state.current_chat_id]["messages"]  
-        if curr_msgs_sidebar:  
+        curr_msgs_sb = st.session_state.free_chats[st.session_state.current_chat_id]["messages"]  
+        if curr_msgs_sb:  
             st.markdown("**📦 导出当前对话**")  
             exp_mode = st.radio("格式", ["完整记录", "纯享正文"], label_visibility="collapsed")  
             is_pure = (exp_mode == "纯享正文")  
             if is_pure:  
-                txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_msgs_sidebar if m['role'] == 'assistant'])  
+                txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_msgs_sb if m['role'] == 'assistant'])  
             else:  
-                txt_c = "".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n\n" for m in curr_msgs_sidebar])  
-            c1, c2, c3 = st.columns(3)  
-            with c1: st.download_button("📥 TXT", txt_c.encode('utf-8'), "对话.txt", "text/plain", use_container_width=True)  
-            with c2: st.download_button("📥 Word", generate_word_doc(curr_msgs_sidebar, is_pure), "对话.docx", use_container_width=True)  
-            with c3: st.download_button("🎨 HTML", export_to_pretty_html(curr_msgs_sidebar, st.session_state.free_chats[st.session_state.current_chat_id]["title"]), "对话.html", "text/html", use_container_width=True)  
+                parts = []  
+                for m in curr_msgs_sb:  
+                    role_name = "我" if m['role'] == 'user' else "AI"  
+                    parts.append(role_name + ":\n" + m['content'] + "\n\n" + "-" * 40 + "\n")  
+                txt_c = "\n".join(parts)  
   
-        # 删除对话（二次确认）  
+            ec1, ec2, ec3 = st.columns(3)  
+            with ec1:  
+                st.download_button("📥 TXT", txt_c.encode('utf-8'), "对话.txt", "text/plain", use_container_width=True)  
+            with ec2:  
+                st.download_button("📥 Word", generate_word_doc(curr_msgs_sb, is_pure), "对话.docx", use_container_width=True)  
+            with ec3:  
+                chat_title_html = st.session_state.free_chats[st.session_state.current_chat_id]["title"]  
+                st.download_button("🎨 HTML", export_to_pretty_html(curr_msgs_sb, chat_title_html), "对话.html", "text/html", use_container_width=True)  
+  
         if st.session_state.get("_confirm_del_chat"):  
             st.error("确认删除此对话？不可撤回！")  
-            cc1, cc2 = st.columns(2)  
-            if cc1.button("✅ 确认", key="yes_del_chat"):  
+            dcc1, dcc2 = st.columns(2)  
+            if dcc1.button("✅ 确认", key="yes_del_chat"):  
                 if len(st.session_state.free_chats) > 1:  
                     del st.session_state.free_chats[st.session_state.current_chat_id]  
                 else:  
-                    st.session_state.free_chats[st.session_state.current_chat_id] = {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}  
+                    st.session_state.free_chats[st.session_state.current_chat_id] = {  
+                        "title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""  
+                    }  
                 st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]  
-                st.session_state._confirm_del_chat = False; save_free_chats(); st.rerun()  
-            if cc2.button("❌ 取消", key="no_del_chat"):  
-                st.session_state._confirm_del_chat = False; st.rerun()  
+                st.session_state._confirm_del_chat = False  
+                save_free_chats()  
+                st.rerun()  
+            if dcc2.button("❌ 取消", key="no_del_chat"):  
+                st.session_state._confirm_del_chat = False  
+                st.rerun()  
         else:  
             if st.button("🗑️ 删除对话", use_container_width=True):  
-                st.session_state._confirm_del_chat = True; st.rerun()  
+                st.session_state._confirm_del_chat = True  
+                st.rerun()  
   
-    # 全量资产导出恢复  
+    # === 全量资产导出恢复舱 ===  
     st.divider()  
     with st.expander("📦 全量资产导出恢复舱", expanded=False):  
-        st.caption("换电脑时一键导入导出所有数据（SOP、引擎、记忆、聊天）。")  
+        st.caption("换电脑时一键导入导出所有数据。")  
         full_data = json.dumps({  
-            "profiles": st.session_state.profiles, "sops": st.session_state.sops,  
-            "memory": st.session_state.memory, "free_chats": st.session_state.free_chats  
+            "profiles": st.session_state.profiles,  
+            "sops": st.session_state.sops,  
+            "memory": st.session_state.memory,  
+            "free_chats": st.session_state.free_chats  
         }, ensure_ascii=False, indent=2).encode('utf-8')  
-        if st.download_button("📥 导出全量快照包", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "application/json", use_container_width=True, type="primary"):  
+        fname = "ZenMux_Backup_" + datetime.now().strftime('%m%d_%H%M') + ".json"  
+        if st.download_button("📥 导出全量快照包", full_data, fname, "application/json", use_container_width=True, type="primary"):  
             st.session_state._unsaved = 0  
   
         uploaded_ws = st.file_uploader("📂 导入快照 (覆盖当前)", type="json")  
@@ -267,22 +351,26 @@ with st.sidebar:
                 data = json.loads(uploaded_ws.getvalue().decode('utf-8'))  
                 st.session_state.profiles = data.get("profiles", st.session_state.profiles)  
                 st.session_state.sops = data.get("sops", st.session_state.sops)  
-                # 兼容旧SOP缺少新字段  
                 for sop in st.session_state.sops.values():  
-                    for s in sop.get("steps", []): _ensure_step(s)  
+                    for s in sop.get("steps", []):  
+                        _ensure_step(s)  
                 st.session_state.memory = data.get("memory", st.session_state.memory)  
                 st.session_state.free_chats = data.get("free_chats", st.session_state.free_chats)  
-                # 兼容旧聊天缺少新字段  
-                for ch in st.session_state.free_chats.values(): _ensure_chat(ch)  
+                for ch in st.session_state.free_chats.values():  
+                    _ensure_chat(ch)  
                 if not st.session_state.free_chats:  
                     nid = str(uuid.uuid4())  
-                    st.session_state.free_chats = {nid: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}}  
+                    st.session_state.free_chats = {  
+                        nid: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": ""}  
+                    }  
                 st.session_state.active_profile_idx = 0  
                 st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]  
                 st.session_state._unsaved = 0  
                 st.success("✅ 恢复成功！")  
                 st.rerun()  
-            except Exception as e: st.error(f"导入失败: {e}")  
+            except Exception as e:  
+                st.error("导入失败: " + str(e))  
+  
 # ==========================================  
 # 模块 1: 自动化流水线  
 # ==========================================  
@@ -293,53 +381,66 @@ if st.session_state.current_page == "🤖 自动化流水线":
     with col_ctrl:  
         st.header("⚙️ 调度控制台")  
   
-        # === 运行中状态 ===  
         if engine["is_running"]:  
             if engine.get("is_paused"):  
-                # ---- 已暂停 ----  
-                st.info("⏸️ 引擎已暂停，可注入修正指令")  
-                pause_input = st.text_area("💬 修正指令（留空则直接继续）", "", placeholder="例如：接下来减少对话，多写心理描写", height=80)  
+                st.info("⏸️ 引擎已暂停")  
+                pause_input = st.text_area(  
+                    "💬 注入修正指令（留空直接继续）", "",  
+                    placeholder="例如：接下来减少对话，多写心理描写", height=80  
+                )  
                 cp1, cp2 = st.columns(2)  
                 if cp1.button("▶️ 继续执行", type="primary", use_container_width=True):  
-                    if pause_input.strip(): engine["pending_instruction"] = pause_input.strip()  
-                    engine["is_paused"] = False; st.rerun()  
+                    if pause_input.strip():  
+                        engine["pending_instruction"] = pause_input.strip()  
+                    engine["is_paused"] = False  
+                    st.rerun()  
                 if cp2.button("⏹️ 彻底停止", use_container_width=True):  
-                    engine["is_running"] = False; engine["is_paused"] = False; st.rerun()  
+                    engine["is_running"] = False  
+                    engine["is_paused"] = False  
+                    st.rerun()  
             else:  
-                # ---- 运转中 ----  
                 st.warning("⚠️ 引擎高速运转中...")  
-                sop_steps_count = max(len(st.session_state.sops.get(engine["sop_name"], {"steps": []})["steps"]), 1)  
-                st.progress(min(engine["current_step_idx"] / sop_steps_count, 1.0))  
-                st.caption(f"阶段 {engine['current_step_idx']+1}/{sop_steps_count} | 循环 {engine['current_loop_idx']} | 矫正第{engine['correction_count']}轮")  
+                sop_steps_total = max(len(st.session_state.sops.get(engine["sop_name"], {"steps": []})["steps"]), 1)  
+                st.progress(min(engine["current_step_idx"] / sop_steps_total, 1.0))  
+                info_str = (  
+                    "阶段 " + str(engine['current_step_idx'] + 1) + "/" + str(sop_steps_total) +  
+                    " | 循环 " + str(engine['current_loop_idx']) +  
+                    " | 矫正第" + str(engine['correction_count']) + "轮"  
+                )  
+                st.caption(info_str)  
   
-                # 实时字数统计  
-                ai_msgs = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]  
-                if ai_msgs:  
-                    total_wc = sum(count_words(m["content"]) for m in ai_msgs)  
-                    st.metric("📊 已生成总字数", f"{total_wc:,}")  
+                ai_msgs_running = [m for m in engine["messages"] if m["role"] == "assistant" and m.get("selected", True)]  
+                if ai_msgs_running:  
+                    total_wc_run = sum(count_words(m["content"]) for m in ai_msgs_running)  
+                    st.metric("📊 已生成总字数", "{:,}".format(total_wc_run))  
   
                 cp1, cp2 = st.columns(2)  
                 if cp1.button("⏸️ 暂停", use_container_width=True):  
-                    engine["is_paused"] = True; st.rerun()  
+                    engine["is_paused"] = True  
+                    st.rerun()  
                 if cp2.button("⏹️ 强制急停", type="primary", use_container_width=True):  
-                    engine["is_running"] = False; st.rerun()  
-  
-        # === 待机状态 ===  
+                    engine["is_running"] = False  
+                    st.rerun()  
         else:  
             if not st.session_state.sops:  
-                st.warning("请先去配置一个 SOP。"); st.stop()  
+                st.warning("请先去配置一个 SOP。")  
+                st.stop()  
             sel_sop = st.selectbox("1. 挂载执行 SOP (账号人设)", list(st.session_state.sops.keys()))  
             in_topic = st.text_input("2. 注入 {主题}", placeholder="例如：赛博朋克修仙传")  
             up_file = st.file_uploader("3. 挂载全局设定集 (可选)", type=['txt', 'md'])  
   
             if st.button("🚀 点火启动", type="primary", use_container_width=True):  
-                if not active_p["api_key"]: st.error("引擎未配置 API Key！")  
-                elif not in_topic: st.error("请填入主题！")  
+                if not active_p["api_key"]:  
+                    st.error("引擎未配置 API Key！")  
+                elif not in_topic:  
+                    st.error("请填入主题！")  
                 else:  
+                    gf = ""  
+                    if up_file:  
+                        gf = up_file.getvalue().decode("utf-8")  
                     engine.update({  
                         "is_running": True, "is_paused": False, "is_finished": False, "messages": [],  
-                        "sop_name": sel_sop, "topic": in_topic,  
-                        "global_file": up_file.getvalue().decode("utf-8") if up_file else "",  
+                        "sop_name": sel_sop, "topic": in_topic, "global_file": gf,  
                         "current_step_idx": 0, "current_loop_idx": 1,  
                         "pending_instruction": "", "last_finish_reason": "",  
                         "correction_count": 0, "word_count_log": [], "model_bias_history": []  
@@ -354,7 +455,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
             raw_text = "\n\n".join([m["content"] for m in sel_msgs])  
             pure_text = clean_novel_text(raw_text)  
             total_export_wc = count_words(pure_text)  
-            st.info(f"📊 选中导出内容：**{total_export_wc:,}** 字 | **{len(sel_msgs)}** 段")  
+            st.info("📊 选中导出内容：**{:,}** 字 | **{}** 段".format(total_export_wc, len(sel_msgs)))  
   
             if not engine["is_running"]:  
                 sop_data = st.session_state.sops.get(engine["sop_name"], {})  
@@ -364,122 +465,185 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     st.caption("🧠 记忆模式：手动提取蒸馏")  
                     if st.button("💾 存入该账号记忆保险库", type="primary", use_container_width=True):  
                         sn = engine["sop_name"]  
-                        if sn not in st.session_state.memory: st.session_state.memory[sn] = []  
+                        if sn not in st.session_state.memory:  
+                            st.session_state.memory[sn] = []  
                         st.session_state.memory[sn].append({  
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),  
-                            "topic": engine["topic"], "content": pure_text[:2500]  
+                            "topic": engine["topic"],  
+                            "content": pure_text[:2500]  
                         })  
-                        save_memory(); st.toast("已安全落盘！", icon="💾")  
+                        save_memory()  
+                        st.toast("已安全落盘！", icon="💾")  
                 else:  
                     st.caption("🌱 记忆模式：动态活体进化")  
                     feedback = st.text_input("💬 避坑反馈：", placeholder="例如：不准写废话")  
                     if st.button("提交反馈写入潜意识", use_container_width=True):  
                         if feedback.strip():  
-                            sop_data.setdefault("negative_memory", []).append(feedback)  
+                            if "negative_memory" not in sop_data:  
+                                sop_data["negative_memory"] = []  
+                            sop_data["negative_memory"].append(feedback)  
                             save_sops()  
                             if len(sop_data["negative_memory"]) >= 3:  
                                 with st.spinner("融合新规则中..."):  
                                     try:  
                                         client, profile = get_client()  
-                                        fusion_p = f"原人设：{sop_data['system_prompt']}。避坑反馈：{'; '.join(sop_data['negative_memory'])}。请深度融合进原人设，输出纯文本新 System Prompt。"  
-                                        resp = client.chat.completions.create(model=profile["model"], messages=[{"role": "user", "content": fusion_p}])  
+                                        fusion_p = (  
+                                            "原人设：" + sop_data['system_prompt'] +  
+                                            "。避坑反馈：" + '; '.join(sop_data['negative_memory']) +  
+                                            "。请深度融合进原人设，输出纯文本新 System Prompt。"  
+                                        )  
+                                        resp = client.chat.completions.create(  
+                                            model=profile["model"],  
+                                            messages=[{"role": "user", "content": fusion_p}]  
+                                        )  
                                         sop_data["system_prompt"] = resp.choices[0].message.content.strip()  
-                                        sop_data["negative_memory"] = []; save_sops()  
+                                        sop_data["negative_memory"] = []  
+                                        save_sops()  
                                         st.success("人设已进化！")  
-                                    except Exception as e: st.error(f"融合失败: {e}")  
-                            else: st.toast("反馈已记录！", icon="✅")  
+                                    except Exception as e:  
+                                        st.error("融合失败: " + str(e))  
+                            else:  
+                                st.toast("反馈已记录！", icon="✅")  
   
-            # 导出按钮  
-            c1, c2, c3 = st.columns(3)  
-            with c1: st.download_button("📥 全文TXT", raw_text.encode('utf-8'), f"{engine['topic']}_完整.txt", use_container_width=True)  
-            with c2: st.download_button("✨ 纯享TXT", pure_text.encode('utf-8'), f"{engine['topic']}_纯正文.txt", use_container_width=True)  
-            with c3: st.download_button("🎨 精美HTML", export_to_pretty_html(engine["messages"], engine["topic"]), f"{engine['topic']}.html", "text/html", use_container_width=True)  
+            ec1, ec2, ec3 = st.columns(3)  
+            with ec1:  
+                st.download_button(  
+                    "📥 全文TXT", raw_text.encode('utf-8'),  
+                    engine['topic'] + "_完整.txt", use_container_width=True  
+                )  
+            with ec2:  
+                st.download_button(  
+                    "✨ 纯享TXT", pure_text.encode('utf-8'),  
+                    engine['topic'] + "_纯正文.txt", use_container_width=True  
+                )  
+            with ec3:  
+                st.download_button(  
+                    "🎨 精美HTML", export_to_pretty_html(engine["messages"], engine["topic"]),  
+                    engine['topic'] + ".html", "text/html", use_container_width=True  
+                )  
   
-            # 字数统计报告  
+            # 字数精控报告  
             if engine["word_count_log"]:  
                 with st.expander("📊 字数精控报告", expanded=False):  
                     total_actual = sum(w["actual"] for w in engine["word_count_log"])  
                     total_target = sum(w["target"] for w in engine["word_count_log"])  
-                    avg_dev = sum(abs(w["actual"]-w["target"])/max(w["target"],1) for w in engine["word_count_log"]) / len(engine["word_count_log"])  
-                    st.markdown(f"**合计**: {total_actual:,} / 目标 {total_target:,} | **平均偏差**: {avg_dev:.1%}")  
+                    if engine["word_count_log"]:  
+                        avg_dev = sum(  
+                            abs(w["actual"] - w["target"]) / max(w["target"], 1)  
+                            for w in engine["word_count_log"]  
+                        ) / len(engine["word_count_log"])  
+                    else:  
+                        avg_dev = 0  
+                    st.markdown(  
+                        "**合计**: {:,} / 目标 {:,} | **平均偏差**: {:.1%}".format(  
+                            total_actual, total_target, avg_dev  
+                        )  
+                    )  
                     header = "| 章节 | 目标 | 实际 | 偏差 | 矫正 |\n|---|---|---|---|---|\n"  
                     rows = ""  
                     for w in engine["word_count_log"]:  
                         dev = (w["actual"] - w["target"]) / max(w["target"], 1)  
                         emoji = "✅" if abs(dev) <= 0.05 else "⚠️"  
-                        rows += f"| 阶段{w['step']+1}-第{w['loop']}轮 | {w['target']} | {w['actual']} | {dev:+.1%} {emoji} | {w['corrections']}次 |\n"  
+                        rows += (  
+                            "| 阶段" + str(w['step'] + 1) + "-第" + str(w['loop']) + "轮"  
+                            + " | " + str(w['target'])  
+                            + " | " + str(w['actual'])  
+                            + " | " + "{:+.1%}".format(dev) + " " + emoji  
+                            + " | " + str(w['corrections']) + "次 |\n"  
+                        )  
                     st.markdown(header + rows)  
   
             # 清理工作台（二次确认）  
             if st.session_state.get("_confirm_clear"):  
                 st.error("确认清理？所有生成内容将丢失！")  
-                cc1, cc2 = st.columns(2)  
-                if cc1.button("✅ 确认清理", key="yes_clear"):  
-                    engine.update({"messages": [], "is_finished": False, "is_running": False, "word_count_log": [], "model_bias_history": []})  
-                    st.session_state._confirm_clear = False; st.rerun()  
-                if cc2.button("❌ 取消", key="no_clear"):  
-                    st.session_state._confirm_clear = False; st.rerun()  
+                clc1, clc2 = st.columns(2)  
+                if clc1.button("✅ 确认清理", key="yes_clear"):  
+                    engine.update({  
+                        "messages": [], "is_finished": False, "is_running": False,  
+                        "word_count_log": [], "model_bias_history": []  
+                    })  
+                    st.session_state._confirm_clear = False  
+                    st.rerun()  
+                if clc2.button("❌ 取消", key="no_clear"):  
+                    st.session_state._confirm_clear = False  
+                    st.rerun()  
             else:  
                 if st.button("🧹 清理工作台", use_container_width=True):  
-                    st.session_state._confirm_clear = True; st.rerun()  
+                    st.session_state._confirm_clear = True  
+                    st.rerun()  
   
     # === 监视大屏 ===  
     with col_view:  
         st.header("🖥️ 监视大屏")  
         with st.container(height=750, border=True):  
             for i, msg in enumerate(engine["messages"]):  
-                if msg["role"] == "system": continue  
+                if msg["role"] == "system":  
+                    continue  
                 with st.chat_message(msg["role"]):  
                     st.markdown(msg["content"])  
                     if msg["role"] == "assistant":  
                         render_copy_button(msg["content"])  
-                        wc = count_words(msg["content"])  
                         ws = msg.get("_word_status", "")  
-                        if ws: st.caption(ws)  
-                        else: st.caption(f"📊 {wc} 字")  
-                        msg["selected"] = st.checkbox("☑️ 选中导出", msg.get("selected", True), key=f"ac_{i}")  
+                        if ws:  
+                            st.caption(ws)  
+                        else:  
+                            st.caption("📊 " + str(count_words(msg["content"])) + " 字")  
+                        msg["selected"] = st.checkbox(  
+                            "☑️ 选中导出", msg.get("selected", True), key="ac_" + str(i)  
+                        )  
   
             # === 核心执行引擎 ===  
             if engine["is_running"] and not engine.get("is_paused", False):  
                 client, profile = get_client()  
                 sop_data = st.session_state.sops[engine["sop_name"]]  
                 steps = sop_data["steps"]  
-                for s in steps: _ensure_step(s)  
+                for s in steps:  
+                    _ensure_step(s)  
                 triggers = sop_data.get("triggers", [])  
                 curr_step = steps[engine["current_step_idx"]]  
   
-                # 构建当前提示词  
-                current_prompt = engine["pending_instruction"] or curr_step["prompt"].replace("{主题}", engine["topic"]).replace("{循环索引}", str(engine["current_loop_idx"]))  
+                current_prompt = engine["pending_instruction"]  
+                if not current_prompt:  
+                    current_prompt = curr_step["prompt"].replace(  
+                        "{主题}", engine["topic"]  
+                    ).replace(  
+                        "{循环索引}", str(engine["current_loop_idx"])  
+                    )  
                 engine["pending_instruction"] = ""  
   
-                # 字数精控：预注入字数要求  
+                # 字数精控：预注入  
                 wc_enabled = curr_step.get("enable_word_control", False) and curr_step.get("target_words", 0) > 0  
                 word_injection = ""  
                 if wc_enabled and engine["correction_count"] == 0:  
-                    target = curr_step["target_words"]  
-                    # 自动学习补偿  
+                    target_adj = curr_step["target_words"]  
                     if len(engine["model_bias_history"]) >= 2:  
-                        bias = sum(engine["model_bias_history"][-5:]) / len(engine["model_bias_history"][-5:])  
+                        recent = engine["model_bias_history"][-5:]  
+                        bias = sum(recent) / len(recent)  
                         if abs(bias - 1.0) > 0.05:  
-                            target = int(curr_step["target_words"] / bias)  
-                    word_injection = f"\n\n【本章字数要求：严格控制在 {target} 字左右】"  
+                            target_adj = int(curr_step["target_words"] / bias)  
+                    word_injection = "\n\n【本章字数要求：严格控制在 " + str(target_adj) + " 字左右】"  
   
-                silence = "\n\n【系统强制指令：不要重复上文，不准说"好的"，不准带章节标题，直接从正文第一个字开始！】"  
+                silence = '\n\n【系统强制指令：不要重复上文，不准说好的、收到等废话，不准带章节标题，直接从正文第一个字开始！】'  
                 final_prompt = current_prompt + word_injection + silence  
   
                 engine["messages"].append({"role": "user", "content": current_prompt, "selected": False})  
-                with st.chat_message("user"): st.markdown(f"*(⚡ 指令)*: {current_prompt}")  
+                with st.chat_message("user"):  
+                    st.markdown("*(⚡ 指令)*: " + current_prompt)  
   
-                # 构建 API 消息包（知识置顶：固定头部最大化缓存命中）  
+                # 构建 API 消息包（知识置顶，最大化缓存命中）  
                 api_msgs = []  
                 sys_prompt = sop_data.get("system_prompt", "").strip()  
-                if sys_prompt: api_msgs.append({"role": "system", "content": sys_prompt})  
+                if sys_prompt:  
+                    api_msgs.append({"role": "system", "content": sys_prompt})  
                 if sop_data.get("memory_mode") == "dynamic" and sop_data.get("negative_memory"):  
-                    api_msgs.append({"role": "system", "content": f"【避坑铁律】：{'; '.join(sop_data['negative_memory'])}"})  
+                    api_msgs.append({  
+                        "role": "system",  
+                        "content": "【避坑铁律】：" + '; '.join(sop_data['negative_memory'])  
+                    })  
                 if engine["global_file"]:  
-                    api_msgs.append({"role": "system", "content": f"【全局设定】\n{engine['global_file']}"})  
+                    api_msgs.append({"role": "system", "content": "【全局设定】\n" + engine['global_file']})  
                 if curr_step.get("reference"):  
-                    api_msgs.append({"role": "system", "content": f"【本阶段设定】\n{curr_step['reference']}"})  
+                    api_msgs.append({"role": "system", "content": "【本阶段设定】\n" + curr_step['reference']})  
   
                 for idx, m in enumerate(engine["messages"]):  
                     if idx == len(engine["messages"]) - 1 and m["role"] == "user":  
@@ -494,7 +658,11 @@ if st.session_state.current_page == "🤖 自动化流水线":
                         render_copy_button(full_resp)  
   
                         wc_actual = count_words(full_resp)  
-                        msg_data = {"role": "assistant", "content": full_resp, "selected": True, "_word_status": f"📊 {wc_actual} 字"}  
+                        msg_data = {  
+                            "role": "assistant", "content": full_resp,  
+                            "selected": True,  
+                            "_word_status": "📊 " + str(wc_actual) + " 字"  
+                        }  
                         engine["messages"].append(msg_data)  
   
                         hit_trigger = False  
@@ -506,119 +674,586 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             deviation = (wc_actual - target) / max(target, 1)  
   
                             if abs(deviation) > tol:  
-                                if engine["correction_count"] < curr_step.get("max_corrections", 2):  
+                                max_corr = curr_step.get("max_corrections", 2)  
+                                if engine["correction_count"] < max_corr:  
                                     engine["correction_count"] += 1  
                                     msg_data["selected"] = False  
-                                    msg_data["_word_status"] = f"⚠️ {wc_actual}字 (偏差{deviation:+.1%}，矫正第{engine['correction_count']}轮)"  
+                                    msg_data["_word_status"] = (  
+                                        "⚠️ " + str(wc_actual) + "字 (偏差" +  
+                                        "{:+.1%}".format(deviation) + "，矫正第" +  
+                                        str(engine['correction_count']) + "轮)"  
+                                    )  
                                     if deviation > 0:  
-                                        engine["pending_instruction"] = f"【字数矫正】你刚才写了约{wc_actual}字，超出目标{target}字。请精简至{target}字以内，保持情节完整，删减冗余。"  
+                                        engine["pending_instruction"] = (  
+                                            "【字数矫正】你刚才写了约" + str(wc_actual) +  
+                                            "字，超出目标" + str(target) +  
+                                            "字。请精简至" + str(target) +  
+                                            "字以内，保持情节完整，删减冗余描写。直接输出修改后的完整正文。"  
+                                        )  
                                     else:  
-                                        engine["pending_instruction"] = f"【字数矫正】你刚才只写了约{wc_actual}字，不足目标{target}字。请扩写至{target}字左右，增加场景和细节描写。"  
+                                        engine["pending_instruction"] = (  
+                                            "【字数矫正】你刚才只写了约" + str(wc_actual) +  
+                                            "字，不足目标" + str(target) +  
+                                            "字。请扩写至" + str(target) +  
+                                            "字左右，增加环境描写和细节。直接输出修改后的完整正文。"  
+                                        )  
                                     hit_trigger = True  
                                 else:  
-                                    msg_data["_word_status"] = f"⚠️ {wc_actual}字 (偏差{deviation:+.1%}，已达最大矫正次数)"  
+                                    msg_data["_word_status"] = (  
+                                        "⚠️ " + str(wc_actual) + "字 (偏差" +  
+                                        "{:+.1%}".format(deviation) + "，已达最大矫正次数)"  
+                                    )  
                             else:  
-                                msg_data["_word_status"] = f"✅ {wc_actual}字 (目标{target}字)"  
+                                msg_data["_word_status"] = (  
+                                    "✅ " + str(wc_actual) + "字 (目标" + str(target) + "字)"  
+                                )  
   
                         # === length 中断续写 ===  
                         if not hit_trigger and engine["last_finish_reason"] == "length":  
-                            engine["pending_instruction"] = "⚠️ 因字数限制中断，请紧接上文最后一个字继续。"  
+                            engine["pending_instruction"] = "⚠️ 因字数限制中断，请紧接上文最后一个字继续往下写。"  
                             hit_trigger = True  
   
                         # === 触发器检测 ===  
                         if not hit_trigger:  
                             for t in triggers:  
-                                if t["keyword"] and t["keyword"] in full_resp:  
+                                if t.get("keyword") and t["keyword"] in full_resp:  
                                     if t["type"] == "terminate":  
-                                        engine["is_running"] = False; engine["is_finished"] = True; hit_trigger = True; break  
+                                        engine["is_running"] = False  
+                                        engine["is_finished"] = True  
+                                        hit_trigger = True  
+                                        break  
                                     elif t["type"] == "intervene":  
-                                        engine["pending_instruction"] = t["action"]; hit_trigger = True; break  
+                                        engine["pending_instruction"] = t["action"]  
+                                        hit_trigger = True  
+                                        break  
   
                         # === 正常推进 ===  
                         if not hit_trigger:  
-                            # 记录字数日志  
                             if wc_enabled:  
                                 engine["word_count_log"].append({  
-                                    "step": engine["current_step_idx"], "loop": engine["current_loop_idx"],  
-                                    "target": curr_step["target_words"], "actual": wc_actual,  
+                                    "step": engine["current_step_idx"],  
+                                    "loop": engine["current_loop_idx"],  
+                                    "target": curr_step["target_words"],  
+                                    "actual": wc_actual,  
                                     "corrections": engine["correction_count"]  
                                 })  
-                                engine["model_bias_history"].append(wc_actual / max(curr_step["target_words"], 1))  
+                                engine["model_bias_history"].append(  
+                                    wc_actual / max(curr_step["target_words"], 1)  
+                                )  
                             engine["correction_count"] = 0  
   
                             if engine["current_loop_idx"] < curr_step.get("loop", 1):  
                                 engine["current_loop_idx"] += 1  
                             else:  
-                                engine["current_step_idx"] += 1; engine["current_loop_idx"] = 1  
+                                engine["current_step_idx"] += 1  
+                                engine["current_loop_idx"] = 1  
                             if engine["current_step_idx"] >= len(steps):  
-                                engine["is_running"] = False; engine["is_finished"] = True  
+                                engine["is_running"] = False  
+                                engine["is_finished"] = True  
                         st.rerun()  
                     except Exception as e:  
-                        st.error(f"引擎故障: {e}"); engine["is_running"] = False  
+                        st.error("引擎故障: " + str(e))  
+                        engine["is_running"] = False  
+  
 # ==========================================  
-# 模块 2: 自由聊天区 (知识库常驻 + Prompt Caching)  
+# 模块 2: 自由聊天区 (知识库常驻 + 重新生成 + 编辑)  
 # ==========================================  
 elif st.session_state.current_page == "💬 自由聊天区":  
     curr_chat = _ensure_chat(st.session_state.free_chats[st.session_state.current_chat_id])  
-    st.title(f"💬 {curr_chat['title']}")  
+    st.title("💬 " + curr_chat['title'])  
   
     # === 对话设置区 ===  
-    with st.expander("⚙️ 对话设置（人设 / 知识库）", expanded=bool(curr_chat["session_knowledge"] or curr_chat["system_prompt"])):  
-        # 人设  
-        sop_choice = st.selectbox("💡 快速挂载已有 SOP 人设", ["(自定义)"] + list(st.session_state.sops.keys()))  
+    has_content = bool(curr_chat["session_knowledge"] or curr_chat["system_prompt"])  
+    with st.expander("⚙️ 对话设置（人设 / 知识库）", expanded=has_content):  
+        sop_keys = list(st.session_state.sops.keys())  
+        sop_choice = st.selectbox("💡 快速挂载已有 SOP 人设", ["(自定义)"] + sop_keys)  
         if sop_choice != "(自定义)":  
             prefill = st.session_state.sops[sop_choice].get("system_prompt", "")  
         else:  
             prefill = curr_chat.get("system_prompt", "")  
-        curr_chat["system_prompt"] = st.text_area("🎭 System Prompt (可选)", prefill, height=80, placeholder="给 AI 设定角色和规则")  
+        curr_chat["system_prompt"] = st.text_area(  
+            "🎭 System Prompt (可选)", prefill, height=80,  
+            placeholder="给 AI 设定角色和规则"  
+        )  
   
-        # 文件上传  
-        up_f = st.file_uploader("📎 上传参考文件（常驻本对话，触发 API 缓存）", type=['txt', 'md'], key=f"kb_{st.session_state.current_chat_id}")  
+        up_f = st.file_uploader(  
+            "📎 上传参考文件（常驻本对话，触发 API 缓存）",  
+            type=['txt', 'md'],  
+            key="kb_" + st.session_state.current_chat_id  
+        )  
         if up_f:  
             content = up_f.getvalue().decode('utf-8')  
-            if not any(k["filename"] == up_f.name for k in curr_chat["session_knowledge"]):  
+            already = any(k["filename"] == up_f.name for k in curr_chat["session_knowledge"])  
+            if not already:  
                 curr_chat["session_knowledge"].append({"filename": up_f.name, "content": content})  
-                st.toast(f"✅ 已挂载: {up_f.name}", icon="📎"); st.rerun()  
+                st.toast("✅ 已挂载: " + up_f.name, icon="📎")  
+                st.rerun()  
   
-        # 展示已挂载文件  
         if curr_chat["session_knowledge"]:  
             st.markdown("**已挂载文件：**")  
             for ki, k in enumerate(curr_chat["session_knowledge"]):  
                 kc1, kc2 = st.columns([4, 1])  
-                kc1.caption(f"📄 {k['filename']} ({len(k['content']):,} 字)")  
-                if kc2.button("❌", key=f"rm_kb_{ki}"):  
-                    curr_chat["session_knowledge"].pop(ki); st.rerun()  
+                kc1.caption("📄 " + k['filename'] + " (" + "{:,}".format(len(k['content'])) + " 字)")  
+                if kc2.button("❌", key="rm_kb_" + str(ki)):  
+                    curr_chat["session_knowledge"].pop(ki)  
+                    st.rerun()  
   
     # === 聊天消息展示 ===  
     with st.container(height=600, border=False):  
         editing_idx = st.session_state.get("_editing_chat_idx")  
   
         for i, msg in enumerate(curr_chat["messages"]):  
-            if msg["role"] == "system": continue  
+            if msg["role"] == "system":  
+                continue  
   
             with st.chat_message(msg["role"]):  
-                # 编辑模式  
                 if msg["role"] == "user" and editing_idx == i:  
-                    new_text = st.text_area("✏️ 编辑消息", msg["content"], key=f"edit_area_{i}", height=100)  
-                    ec1, ec2 = st.columns(2)  
-                    if ec1.button("✅ 确认并重新发送", key=f"edit_ok_{i}", type="primary"):  
+                    new_text = st.text_area(  
+                        "✏️ 编辑消息", msg["content"],  
+                        key="edit_area_" + str(i), height=100  
+                    )  
+                    ebc1, ebc2 = st.columns(2)  
+                    if ebc1.button("✅ 确认并重新发送", key="edit_ok_" + str(i), type="primary"):  
                         msg["content"] = new_text  
                         curr_chat["messages"] = curr_chat["messages"][:i + 1]  
                         st.session_state._editing_chat_idx = None  
-                        st.session_state._auto_resend_chat = True  
-                        save_free_chats(); st.rerun()  
-                    if ec2.button("❌ 取消编辑", key=f"edit_cancel_{i}"):  
-                        st.session_state._editing_chat_idx = None; st.rerun()  
+                        st.session_state._auto_resend = True  
+                        save_free_chats()  
+                        st.rerun()  
+                    if ebc2.button("❌ 取消", key="edit_cancel_" + str(i)):  
+                        st.session_state._editing_chat_idx = None  
+                        st.rerun()  
                 else:  
                     st.markdown(msg["content"])  
-  
                     if msg["role"] == "user" and editing_idx is None:  
-                        if st.button("✏️ 编辑", key=f"edit_btn_{i}"):  
-                            st.session_state._editing_chat_idx = i; st.rerun()  
-  
+                        if st.button("✏️", key="edit_btn_" + str(i)):  
+                            st.session_state._editing_chat_idx = i  
+                            st.rerun()  
                     if msg["role"] == "assistant":  
                         render_copy_button(msg["content"])  
-                        st.caption(f"📊 {count_words(msg['content'])} 字")  
-                        if st.button("🔄 重新生成", key=f"regen_{i}"):  
+                        st.caption("📊 " + str(count_words(msg["content"])) + " 字")  
+                        if st.button("🔄 重新生成", key="regen_" + str(i)):  
                             curr_chat["messages"] = curr_chat["messages"][:i]  
-                            st.session_
+                            st.session_state._auto_resend = True  
+                            save_free_chats()  
+                            st.rerun()  
+  
+    # === 发送逻辑 ===  
+    need_resend = st.session_state.pop("_auto_resend", False)  
+    prompt = st.chat_input("输入消息...")  
+  
+    if prompt or need_resend:  
+        if not active_p["api_key"]:  
+            st.error("请先配置 API Key！")  
+            st.stop()  
+  
+        if prompt:  
+            if len(curr_chat["messages"]) == 0:  
+                curr_chat["title"] = prompt[:10] + "..."  
+            curr_chat["messages"].append({"role": "user", "content": prompt})  
+  
+        # 构建 API 消息包（知识置顶，最大化缓存命中）  
+        api_msgs = []  
+  
+        # A. System Prompt  
+        sp = curr_chat.get("system_prompt", "").strip()  
+        if sp:  
+            api_msgs.append({"role": "system", "content": sp})  
+  
+        # B. 知识库全文（固定头部，触发缓存）  
+        if curr_chat["session_knowledge"]:  
+            kb_parts = []  
+            for k in curr_chat["session_knowledge"]:  
+                kb_parts.append("--- 文件: " + k['filename'] + " ---\n" + k['content'])  
+            kb_text = "【以下是当前对话的核心参考文件，回答时务必参考】：\n\n" + "\n\n".join(kb_parts)  
+            api_msgs.append({"role": "system", "content": kb_text})  
+  
+        # C. 历史消息  
+        for m in curr_chat["messages"]:  
+            api_msgs.append({"role": m["role"], "content": m["content"]})  
+  
+        client, profile = get_client()  
+        with st.chat_message("assistant"):  
+            try:  
+                resp = client.chat.completions.create(**build_api_kwargs(profile, api_msgs))  
+                full_resp = st.write_stream(resp)  
+                render_copy_button(full_resp)  
+                curr_chat["messages"].append({"role": "assistant", "content": full_resp})  
+                save_free_chats()  
+                st.rerun()  
+            except Exception as e:  
+                st.error("请求失败: " + str(e))  
+  
+# ==========================================  
+# 模块 3: SOP与灵魂  
+# ==========================================  
+elif st.session_state.current_page == "📝 账号SOP与灵魂":  
+    tab_sop, tab_vault = st.tabs(["🧩 SOP配置与人设管理", "🗄️ 账号记忆保险库"])  
+  
+    with tab_sop:  
+        col1, col2 = st.columns([1, 2.5])  
+        with col1:  
+            st.subheader("账号 SOP 库")  
+            sop_list = list(st.session_state.sops.keys())  
+            s_name = None  
+            if sop_list:  
+                s_name = st.radio("选择编辑对象", sop_list)  
+  
+            st.divider()  
+            if st.button("➕ 创建空白 SOP", use_container_width=True):  
+                new_sop_name = "新账号 " + str(len(st.session_state.sops))  
+                st.session_state.sops[new_sop_name] = {  
+                    "memory_mode": "manual", "system_prompt": "", "negative_memory": [],  
+                    "steps": [_default_step()], "triggers": []  
+                }  
+                save_sops()  
+                st.rerun()  
+  
+            # 从模板创建  
+            with st.expander("📦 从预设模板创建"):  
+                for tpl_name, tpl_data in BUILTIN_TEMPLATES.items():  
+                    if st.button("使用 " + tpl_name, key="tpl_" + tpl_name, use_container_width=True):  
+                        st.session_state.sops[tpl_name] = copy.deepcopy(tpl_data)  
+                        save_sops()  
+                        st.rerun()  
+  
+            # 复制 SOP  
+            if s_name:  
+                if st.button("📋 复制当前 SOP", use_container_width=True):  
+                    new_n = s_name + " (副本)"  
+                    st.session_state.sops[new_n] = copy.deepcopy(st.session_state.sops[s_name])  
+                    save_sops()  
+                    st.rerun()  
+  
+        with col2:  
+            if s_name:  
+                sop = st.session_state.sops[s_name]  
+  
+                ca, cb = st.columns([3, 1])  
+                with ca:  
+                    new_name = st.text_input("✏️ 账号名称", s_name)  
+                with cb:  
+                    st.write("")  
+                    if st.button("💾 保存配置", type="primary", use_container_width=True):  
+                        save_sops()  
+                        st.success("已保存！")  
+  
+                if new_name != s_name and new_name.strip():  
+                    st.session_state.sops[new_name] = st.session_state.sops.pop(s_name)  
+                    if s_name in st.session_state.memory:  
+                        st.session_state.memory[new_name] = st.session_state.memory.pop(s_name)  
+                        save_memory()  
+                    save_sops()  
+                    st.rerun()  
+  
+                st.markdown("### 🧠 记忆生长模式")  
+                mode_opts = {  
+                    "manual": "保守派：手动挑选好文章提取风格",  
+                    "dynamic": "激进派：自动活体记忆避坑反馈"  
+                }  
+                current_mode_idx = 0 if sop.get("memory_mode", "manual") == "manual" else 1  
+                sop["memory_mode"] = st.radio(  
+                    "选择成长路线", ["manual", "dynamic"],  
+                    format_func=lambda x: mode_opts[x], index=current_mode_idx,  
+                    label_visibility="collapsed"  
+                )  
+  
+                if sop["memory_mode"] == "dynamic" and sop.get("negative_memory"):  
+                    with st.expander("👀 已吸收的避坑清单", expanded=True):  
+                        for nm in sop["negative_memory"]:  
+                            st.markdown("- " + nm)  
+                        if st.button("强行清空避坑清单"):  
+                            sop["negative_memory"] = []  
+                            save_sops()  
+                            st.rerun()  
+  
+                st.markdown("### 🎭 专属人设 (System Prompt)")  
+                sop["system_prompt"] = st.text_area("核心指令", sop.get("system_prompt", ""), height=100)  
+  
+                st.markdown("### 🧩 执行阶段配置")  
+                new_steps = []  
+                for i, step in enumerate(sop["steps"]):  
+                    _ensure_step(step)  
+                    with st.container(border=True):  
+                        st.markdown("**阶段 " + str(i + 1) + "**")  
+                        sc1, sc2 = st.columns([4, 1])  
+                        with sc1:  
+                            p_val = st.text_area(  
+                                "指令", step["prompt"], height=60,  
+                                key="p_" + str(i), label_visibility="collapsed"  
+                            )  
+                        with sc2:  
+                            l_val = st.number_input(  
+                                "循环", min_value=1, value=step.get("loop", 1), key="l_" + str(i)  
+                            )  
+  
+                        # 字数精控（可选）  
+                        wc_on = st.checkbox(  
+                            "📏 启用字数精控", step.get("enable_word_control", False),  
+                            key="wc_on_" + str(i)  
+                        )  
+                        tgt_w = step.get("target_words", 0)  
+                        tol_w = step.get("word_tolerance", 5)  
+                        mc_w = step.get("max_corrections", 2)  
+                        if wc_on:  
+                            wcc1, wcc2, wcc3 = st.columns(3)  
+                            with wcc1:  
+                                tgt_w = st.number_input(  
+                                    "目标字数", min_value=100, value=max(tgt_w, 100),  
+                                    step=100, key="tgt_" + str(i)  
+                                )  
+                            with wcc2:  
+                                tol_w = st.slider(  
+                                    "容差%", 1, 30, tol_w, key="tol_" + str(i)  
+                                )  
+                            with wcc3:  
+                                mc_w = st.number_input(  
+                                    "最大矫正轮", min_value=0, max_value=5,  
+                                    value=mc_w, key="mc_" + str(i)  
+                                )  
+  
+                        with st.expander("📁 挂载阶段参考资料"):  
+                            ref = st.text_area(  
+                                "粘贴资料", step.get("reference", ""), key="r_" + str(i)  
+                            )  
+  
+                        new_steps.append({  
+                            "prompt": p_val, "loop": l_val, "reference": ref,  
+                            "enable_word_control": wc_on, "target_words": tgt_w,  
+                            "word_tolerance": tol_w, "max_corrections": mc_w  
+                        })  
+                sop["steps"] = new_steps  
+  
+                sbc1, sbc2 = st.columns(2)  
+                with sbc1:  
+                    if st.button("➕ 加阶段", use_container_width=True):  
+                        sop["steps"].append(_default_step())  
+                        save_sops()  
+                        st.rerun()  
+                with sbc2:  
+                    if len(sop["steps"]) > 1 and st.button("➖ 删末尾阶段", use_container_width=True):  
+                        sop["steps"].pop()  
+                        save_sops()  
+                        st.rerun()  
+  
+                st.markdown("### ⚡ 监听触发器网络")  
+                new_triggers = []  
+                for i, t in enumerate(sop.get("triggers", [])):  
+                    with st.container(border=True):  
+                        tc1, tc2, tc3 = st.columns([1, 1, 2])  
+                        with tc1:  
+                            typ = st.selectbox(  
+                                "类型", ["terminate", "intervene"],  
+                                index=0 if t["type"] == "terminate" else 1,  
+                                key="t_" + str(i)  
+                            )  
+                        with tc2:  
+                            kwd = st.text_input("关键词", t["keyword"], key="k_" + str(i))  
+                        with tc3:  
+                            act = st.text_input(  
+                                "动作指令", t.get("action", ""),  
+                                disabled=(typ == "terminate"), key="a_" + str(i)  
+                            )  
+                        new_triggers.append({"type": typ, "keyword": kwd, "action": act})  
+                sop["triggers"] = new_triggers  
+                if st.button("➕ 加规则"):  
+                    sop["triggers"].append({"type": "intervene", "keyword": "", "action": ""})  
+                    save_sops()  
+                    st.rerun()  
+  
+                st.divider()  
+                # 删除 SOP（二次确认）  
+                if st.session_state.get("_confirm_del_sop"):  
+                    st.error("确认删除 SOP [" + s_name + "]？不可撤回！")  
+                    dsc1, dsc2 = st.columns(2)  
+                    if dsc1.button("✅ 确认删除", key="yes_del_sop"):  
+                        del st.session_state.sops[s_name]  
+                        if s_name in st.session_state.memory:  
+                            del st.session_state.memory[s_name]  
+                            save_memory()  
+                        save_sops()  
+                        st.session_state._confirm_del_sop = False  
+                        st.rerun()  
+                    if dsc2.button("❌ 取消", key="no_del_sop"):  
+                        st.session_state._confirm_del_sop = False  
+                        st.rerun()  
+                else:  
+                    if st.button("🗑️ 删除此 SOP", type="primary"):  
+                        st.session_state._confirm_del_sop = True  
+                        st.rerun()  
+  
+    with tab_vault:  
+        st.header("🗄️ 记忆保险库与炼丹炉")  
+        if not sop_list:  
+            st.info("请先创建 SOP")  
+        else:  
+            vault_sop = st.selectbox("选择账号", sop_list, key="vault_sel")  
+            acc_mem = st.session_state.memory.get(vault_sop, [])  
+            if not acc_mem:  
+                st.info("【" + vault_sop + "】保险库为空。")  
+            else:  
+                st.success("🗃️ 已沉淀 " + str(len(acc_mem)) + " 篇作品。")  
+                for idx, item in enumerate(reversed(acc_mem)):  
+                    with st.expander("📖 [" + item['time'] + "] " + item['topic']):  
+                        st.caption(item['content'])  
+                        if st.button("🗑️ 抹除此记忆", key="del_mem_" + str(idx)):  
+                            st.session_state.memory[vault_sop].remove(item)  
+                            save_memory()  
+                            st.rerun()  
+  
+                st.divider()  
+                if st.button("🔥 立即开炉提炼灵魂 (风格蒸馏)", type="primary", use_container_width=True):  
+                    if not active_p["api_key"]:  
+                        st.error("缺 API Key！")  
+                    else:  
+                        client, profile = get_client()  
+                        combined = "\n\n---\n\n".join([m['content'] for m in acc_mem[-3:]])  
+                        distill_p = (  
+                            "深度分析以下小说风格，提炼一段极度严谨的【System Prompt】复刻文风。"  
+                            "只需输出纯文本的 Prompt。\n样本：\n" + combined  
+                        )  
+                        with st.spinner("正在提炼灵魂设定..."):  
+                            try:  
+                                resp = client.chat.completions.create(  
+                                    model=profile["model"],  
+                                    messages=[{"role": "user", "content": distill_p}]  
+                                )  
+                                result = resp.choices[0].message.content.strip()  
+                                st.session_state.sops[vault_sop]["system_prompt"] = result  
+                                save_sops()  
+                                st.success("🎉 蒸馏成功！人设已注入全新灵魂！")  
+                                st.info("**提炼成果:**\n\n" + result)  
+                            except Exception as e:  
+                                st.error("蒸馏失败: " + str(e))  
+  
+# ==========================================  
+# 模块 4: 底层引擎配置  
+# ==========================================  
+elif st.session_state.current_page == "⚙️ 底层引擎配置":  
+    st.header("⚙️ 底层驱动配置")  
+    col_list, col_edit = st.columns([1, 2.5])  
+  
+    with col_list:  
+        st.subheader("引擎库")  
+        p_names = [p["name"] for p in st.session_state.profiles]  
+        idx = st.radio(  
+            "切换引擎", range(len(p_names)),  
+            format_func=lambda x: p_names[x],  
+            index=st.session_state.active_profile_idx  
+        )  
+        st.session_state.active_profile_idx = idx  
+        if st.button("➕ 新增引擎", use_container_width=True):  
+            st.session_state.profiles.append({  
+                "name": "新引擎 " + str(len(p_names) + 1),  
+                "base_url": "", "api_key": "",  
+                "model": "anthropic/claude-sonnet-4.6",  
+                "use_temperature": True, "temperature": 0.8,  
+                "use_max_tokens": True, "max_tokens": 4096,  
+                "use_top_p": False, "top_p": 1.0,  
+                "use_frequency_penalty": False, "frequency_penalty": 0.0  
+            })  
+            save_profiles()  
+            st.rerun()  
+  
+    with col_edit:  
+        st.subheader("网络与参数调优")  
+        p = st.session_state.profiles[idx]  
+  
+        eca, ecb = st.columns([3, 1])  
+        with eca:  
+            p["name"] = st.text_input("引擎标签", p["name"])  
+        with ecb:  
+            st.write("")  
+            if st.button("💾 保存引擎配置", type="primary", use_container_width=True):  
+                save_profiles()  
+                st.success("已保存！")  
+  
+        nc1, nc2 = st.columns(2)  
+        with nc1:  
+            p["base_url"] = st.text_input("Base URL", p["base_url"])  
+        with nc2:  
+            p["api_key"] = st.text_input("API Key", p["api_key"], type="password")  
+  
+        # API Key 连通测试  
+        if p["api_key"]:  
+            if st.button("🔑 测试连通性"):  
+                with st.spinner("正在测试..."):  
+                    try:  
+                        test_client = OpenAI(  
+                            base_url=p["base_url"].strip() or "https://api.openai.com/v1",  
+                            api_key=p["api_key"].strip()  
+                        )  
+                        test_resp = test_client.chat.completions.create(  
+                            model=p["model"],  
+                            messages=[{"role": "user", "content": "Hi"}],  
+                            max_tokens=5  
+                        )  
+                        st.success("✅ 连通成功！模型响应正常。")  
+                    except Exception as e:  
+                        st.error("❌ 连通失败: " + str(e))  
+  
+        cm, cb2 = st.columns([3, 1])  
+        with cm:  
+            p["model"] = st.text_input("模型映射 (Model ID)", p["model"])  
+        with cb2:  
+            st.write("")  
+            if st.button("🔄 联机获取列表"):  
+                if p["api_key"]:  
+                    with st.spinner("正在获取..."):  
+                        success, result = fetch_models(p["base_url"], p["api_key"])  
+                        if success:  
+                            if result:  
+                                st.session_state.temp_models = result  
+                                st.success("✅ 抓取到 " + str(len(result)) + " 个模型！")  
+                            else:  
+                                st.warning("请求成功但无模型列表。")  
+                        else:  
+                            st.error("❌ 获取失败: " + str(result))  
+                else:  
+                    st.error("请先填写 API Key！")  
+  
+        if "temp_models" in st.session_state:  
+            sel_m = st.selectbox("选择模型", ["(不覆盖)"] + st.session_state.temp_models)  
+            if sel_m != "(不覆盖)":  
+                p["model"] = sel_m  
+                del st.session_state.temp_models  
+                save_profiles()  
+                st.rerun()  
+  
+        st.markdown("#### 🎛️ 运行时超参数 (勾选生效)")  
+        sl1, sl2 = st.columns(2)  
+        with sl1:  
+            p["use_temperature"] = st.checkbox("🔥 Temperature", p.get("use_temperature", True))  
+            if p["use_temperature"]:  
+                p["temperature"] = st.slider("温度值", 0.0, 2.0, p.get("temperature", 0.8), 0.1, label_visibility="collapsed")  
+            p["use_max_tokens"] = st.checkbox("📏 Max Tokens", p.get("use_max_tokens", True))  
+            if p["use_max_tokens"]:  
+                p["max_tokens"] = st.slider("最大Token", 512, 16384, p.get("max_tokens", 4096), 512, label_visibility="collapsed")  
+        with sl2:  
+            p["use_top_p"] = st.checkbox("🎲 Top P", p.get("use_top_p", False))  
+            if p["use_top_p"]:  
+                p["top_p"] = st.slider("Top P值", 0.0, 1.0, p.get("top_p", 1.0), 0.05, label_visibility="collapsed")  
+            p["use_frequency_penalty"] = st.checkbox("🚫 Frequency Penalty", p.get("use_frequency_penalty", False))  
+            if p["use_frequency_penalty"]:  
+                p["frequency_penalty"] = st.slider("惩罚值", -2.0, 2.0, p.get("frequency_penalty", 0.0), 0.1, label_visibility="collapsed")  
+  
+        # 删除引擎（二次确认）  
+        if len(st.session_state.profiles) > 1:  
+            st.divider()  
+            if st.session_state.get("_confirm_del_engine"):  
+                st.error("确认删除引擎 [" + p['name'] + "]？")  
+                dec1, dec2 = st.columns(2)  
+                if dec1.button("✅ 确认", key="yes_del_eng"):  
+                    st.session_state.profiles.pop(idx)  
+                    st.session_state.active_profile_idx = 0  
+                    st.session_state._confirm_del_engine = False  
+                    save_profiles()  
+                    st.rerun()  
+                if dec2.button("❌ 取消", key="no_del_eng"):  
+                    st.session_state._confirm_del_engine = False  
+                    st.rerun()  
+            else:  
+                if st.button("🗑️ 删除此引擎"):  
+                    st.session_state._confirm_del_engine = True  
+                    st.rerun()  
+```*
