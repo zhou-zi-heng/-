@@ -136,7 +136,22 @@ def generate_word_doc(messages, is_pure=False):
     doc.save(bio)  
     return bio.getvalue()  
   
-def export_to_pretty_html(messages, title):  
+def export_to_pretty_html(messages, title, meta=None):  
+    """  
+    meta 字典可传入：  
+    {  
+        "source": "自由聊天" 或 "自动化流水线",  
+        "system_prompt": "...",  
+        "sop_name": "...",  
+        "model": "...",  
+        "files": [{"filename":"xx.txt","size":12345}, ...],  
+        "global_file_name": "设定集.txt",  
+        "topic": "..."  
+    }  
+    """  
+    if meta is None:  
+        meta = {}  
+  
     css = """  
     * { margin:0; padding:0; box-sizing:border-box; }  
     body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif; background:#f0f2f5; color:#1a1a1a; }  
@@ -144,6 +159,13 @@ def export_to_pretty_html(messages, title):
     .header h1 { font-size:22px; font-weight:700; }  
     .header .meta { font-size:12px; opacity:.75; margin-top:6px; }  
     .chat-container { max-width:860px; margin:0 auto; padding:24px 16px 80px; }  
+    .info-card { background:#fff; border-radius:12px; padding:20px 24px; margin-bottom:24px; box-shadow:0 1px 4px rgba(0,0,0,.06); border-left:4px solid #667eea; }  
+    .info-card h3 { font-size:14px; color:#667eea; margin-bottom:12px; font-weight:700; }  
+    .info-row { display:flex; margin-bottom:8px; font-size:13px; line-height:1.6; }  
+    .info-label { color:#888; min-width:90px; flex-shrink:0; font-weight:600; }  
+    .info-value { color:#333; word-break:break-all; }  
+    .info-value.prompt { background:#f8f8f8; padding:8px 12px; border-radius:6px; font-size:12px; line-height:1.7; margin-top:4px; white-space:pre-wrap; max-height:200px; overflow-y:auto; }  
+    .file-tag { display:inline-block; background:#f0f0f0; padding:2px 10px; border-radius:12px; font-size:12px; color:#555; margin:2px 4px 2px 0; }  
     .msg { display:flex; gap:12px; margin-bottom:24px; align-items:flex-start; }  
     .msg.user { flex-direction:row-reverse; }  
     .avatar { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }  
@@ -152,8 +174,7 @@ def export_to_pretty_html(messages, title):
     .bubble { max-width:75%; padding:14px 18px; border-radius:16px; line-height:1.8; font-size:15px; word-wrap:break-word; white-space:pre-wrap; box-shadow:0 1px 3px rgba(0,0,0,.06); }  
     .msg.ai .bubble { background:#fff; border-top-left-radius:4px; }  
     .msg.user .bubble { background:#d1e7ff; border-top-right-radius:4px; }  
-    .bubble p { margin-bottom:10px; }  
-    .bubble p:last-child { margin-bottom:0; }  
+    .bubble p { margin-bottom:10px; } .bubble p:last-child { margin-bottom:0; }  
     .bubble ul, .bubble ol { padding-left:20px; margin:8px 0; }  
     .bubble li { margin-bottom:4px; }  
     .bubble code { background:#f5f5f5; padding:2px 6px; border-radius:4px; font-size:13px; font-family:'Fira Code',Consolas,monospace; }  
@@ -171,11 +192,11 @@ def export_to_pretty_html(messages, title):
     .footer { text-align:center; padding:32px; font-size:12px; color:#aaa; border-top:1px solid #e5e5e5; max-width:860px; margin:0 auto; }  
     .copy-btn { display:inline-block; margin-top:8px; padding:4px 12px; font-size:12px; color:#888; border:1px solid #ddd; border-radius:6px; cursor:pointer; background:#fff; transition:.2s; }  
     .copy-btn:hover { color:#4CAF50; border-color:#4CAF50; background:#f0f9f0; }  
-    @media(max-width:600px) { .bubble { max-width:88%; font-size:14px; } .header h1 { font-size:18px; } }  
+    .toggle-info { display:inline-block; font-size:12px; color:#667eea; cursor:pointer; margin-left:12px; text-decoration:underline; }  
+    @media(max-width:600px) { .bubble { max-width:88%; font-size:14px; } .header h1 { font-size:18px; } .info-row { flex-direction:column; } .info-label { min-width:auto; margin-bottom:2px; } }  
     @media print { .header{position:relative;} .copy-btn{display:none;} }  
     """  
   
-    # Simple markdown-to-html converter  
     js = """  
     <script>  
     function copyText(btn, id) {  
@@ -187,9 +208,42 @@ def export_to_pretty_html(messages, title):
             setTimeout(function(){ btn.innerText='\\ud83d\\udccb \\u590d\\u5236\\u6587\\u672c'; btn.style.color='#888'; },2000);  
         });  
     }  
+    function toggleInfo() {  
+        var el = document.getElementById('infoCard');  
+        if(el.style.display==='none'){el.style.display='block';}else{el.style.display='none';}  
+    }  
     </script>  
     """  
   
+    # === 构建信息卡片 ===  
+    info_html = ""  
+    has_meta = any(meta.get(k) for k in ["source", "system_prompt", "sop_name", "model", "files", "global_file_name", "topic"])  
+    if has_meta:  
+        rows = ""  
+        if meta.get("source"):  
+            rows += '<div class="info-row"><span class="info-label">\U0001f4cd \u6765\u6e90</span><span class="info-value">' + meta["source"] + '</span></div>'  
+        if meta.get("topic"):  
+            rows += '<div class="info-row"><span class="info-label">\U0001f3af \u4e3b\u9898</span><span class="info-value">' + meta["topic"] + '</span></div>'  
+        if meta.get("sop_name"):  
+            rows += '<div class="info-row"><span class="info-label">\U0001f9e9 SOP</span><span class="info-value">' + meta["sop_name"] + '</span></div>'  
+        if meta.get("model"):  
+            rows += '<div class="info-row"><span class="info-label">\U0001f9e0 \u6a21\u578b</span><span class="info-value">' + meta["model"] + '</span></div>'  
+        if meta.get("files"):  
+            tags = ""  
+            for f in meta["files"]:  
+                size_str = "{:,}".format(f.get("size", 0))  
+                tags += '<span class="file-tag">\U0001f4c4 ' + f["filename"] + ' (' + size_str + ' \u5b57)</span>'  
+            rows += '<div class="info-row"><span class="info-label">\U0001f4ce \u6302\u8f7d\u6587\u4ef6</span><span class="info-value">' + tags + '</span></div>'  
+        if meta.get("global_file_name"):  
+            rows += '<div class="info-row"><span class="info-label">\U0001f4c1 \u8bbe\u5b9a\u96c6</span><span class="info-value">' + meta["global_file_name"] + '</span></div>'  
+        if meta.get("system_prompt"):  
+            import html as html_mod  
+            safe_sp = html_mod.escape(meta["system_prompt"])  
+            rows += '<div class="info-row"><span class="info-label">\U0001f3ad \u4eba\u8bbe</span></div><div class="info-value prompt">' + safe_sp + '</div>'  
+  
+        info_html = '<div class="info-card" id="infoCard">' + '<h3>\u2699\ufe0f \u5bf9\u8bdd\u914d\u7f6e\u4fe1\u606f</h3>' + rows + '</div>'  
+  
+    # === 构建消息 ===  
     msg_html = ""  
     msg_idx = 0  
     for m in messages:  
@@ -197,48 +251,35 @@ def export_to_pretty_html(messages, title):
             continue  
         is_user = m["role"] == "user"  
         role_class = "user" if is_user else "ai"  
-        avatar = "🙋" if is_user else "🤖"  
+        avatar = "\U0001f64b" if is_user else "\U0001f916"  
         content = m["content"]  
   
-        # Basic markdown conversion  
         import html as html_mod  
         safe = html_mod.escape(content)  
-        # Bold  
         safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe)  
-        # Inline code  
         safe = re.sub(r'`([^`]+)`', r'<code>\1</code>', safe)  
-        # Headers  
         safe = re.sub(r'^### (.+)$', r'<h3>\1</h3>', safe, flags=re.MULTILINE)  
         safe = re.sub(r'^## (.+)$', r'<h2>\1</h2>', safe, flags=re.MULTILINE)  
         safe = re.sub(r'^# (.+)$', r'<h1>\1</h1>', safe, flags=re.MULTILINE)  
-        # Lists  
         safe = re.sub(r'^\- (.+)$', r'<li>\1</li>', safe, flags=re.MULTILINE)  
         safe = re.sub(r'((?:<li>.*</li>\n?)+)', r'<ul>\1</ul>', safe)  
-        # Numbered lists  
         safe = re.sub(r'^\d+\.\s+(.+)$', r'<li>\1</li>', safe, flags=re.MULTILINE)  
-        # Paragraphs  
         safe = re.sub(r'\n\n+', '</p><p>', safe)  
         safe = '<p>' + safe + '</p>'  
         safe = safe.replace('\n', '<br>')  
   
         wc = count_words(content)  
         block_id = "block_" + str(msg_idx)  
-  
         copy_html = ""  
         if not is_user:  
-            copy_html = (  
-                '<button class="copy-btn" onclick="copyText(this,\'' + block_id + '\')">'  
-                '\U0001f4cb \u590d\u5236\u6587\u672c</button>'  
-            )  
+            copy_html = '<button class="copy-btn" onclick="copyText(this,\'' + block_id + '\')">\U0001f4cb \u590d\u5236\u6587\u672c</button>'  
   
         msg_html += (  
             '<div class="msg ' + role_class + '">'  
-            '<div class="avatar">' + avatar + '</div>'  
-            '<div>'  
+            '<div class="avatar">' + avatar + '</div><div>'  
             '<div class="bubble" id="' + block_id + '">' + safe + '</div>'  
-            '<div class="word-count">' + str(wc) + ' \u5b57' + '</div>'  
-            + copy_html +  
-            '</div></div>'  
+            '<div class="word-count">' + str(wc) + ' \u5b57</div>'  
+            + copy_html + '</div></div>'  
         )  
         msg_idx += 1  
   
@@ -246,24 +287,25 @@ def export_to_pretty_html(messages, title):
     total_ai_words = sum(count_words(m["content"]) for m in messages if m["role"] == "assistant")  
     total_msgs = sum(1 for m in messages if m["role"] != "system")  
   
+    toggle_link = ""  
+    if has_meta:  
+        toggle_link = '<span class="toggle-info" onclick="toggleInfo()">\u5c55\u5f00/\u6536\u8d77\u914d\u7f6e\u4fe1\u606f</span>'  
+  
     full_html = (  
         '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'  
         '<meta name="viewport" content="width=device-width,initial-scale=1">'  
-        '<title>' + title + '</title>'  
-        '<style>' + css + '</style></head><body>'  
-        '<div class="header">'  
-        '<h1>\U0001f4ac ' + title + '</h1>'  
+        '<title>' + title + '</title><style>' + css + '</style></head><body>'  
+        '<div class="header"><h1>\U0001f4ac ' + title + '</h1>'  
         '<div class="meta">' + date_str + ' | '  
         + str(total_msgs) + ' \u6761\u6d88\u606f | AI \u5171 '  
-        + '{:,}'.format(total_ai_words) + ' \u5b57 | '  
-        'ZenMux \u521b\u4f5c\u8005\u5de5\u4f5c\u7ad9</div>'  
-        '</div>'  
-        '<div class="chat-container">' + msg_html + '</div>'  
-        '<div class="footer">'  
-        '\u7531 ZenMux AI \u521b\u4f5c\u8005\u5168\u81ea\u52a8\u6d41\u6c34\u7ebf\u9a71\u52a8'  
-        '</div>' + js + '</body></html>'  
+        + '{:,}'.format(total_ai_words) + ' \u5b57'  
+        + toggle_link + '</div></div>'  
+        '<div class="chat-container">' + info_html + msg_html + '</div>'  
+        '<div class="footer">ZenMux AI \u521b\u4f5c\u8005\u5de5\u4f5c\u7ad9</div>'  
+        + js + '</body></html>'  
     )  
     return full_html.encode('utf-8')  
+
 
   
 def fetch_models(base_url, api_key):  
@@ -413,7 +455,15 @@ with st.sidebar:
                 st.download_button("📥 Word", generate_word_doc(curr_msgs_sb, is_pure), "对话.docx", use_container_width=True)  
             with ec3:  
                 chat_title_html = st.session_state.free_chats[st.session_state.current_chat_id]["title"]  
-                st.download_button("🎨 HTML", export_to_pretty_html(curr_msgs_sb, chat_title_html), "对话.html", "text/html", use_container_width=True)  
+                _chat_for_export = st.session_state.free_chats[st.session_state.current_chat_id]  
+_export_meta_chat = {  
+    "source": "\u81ea\u7531\u804a\u5929\u533a",  
+    "system_prompt": _chat_for_export.get("system_prompt", ""),  
+    "model": active_p["model"],  
+    "files": [{"filename": k["filename"], "size": len(k["content"])} for k in _chat_for_export.get("session_knowledge", [])]  
+}  
+st.download_button("🎨 HTML", export_to_pretty_html(curr_msgs_sb, chat_title_html, _export_meta_chat), "对话.html", "text/html", use_container_width=True)  
+  
   
         if st.session_state.get("_confirm_del_chat"):  
             st.error("确认删除此对话？不可撤回！")  
@@ -623,10 +673,20 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     engine['topic'] + "_纯正文.txt", use_container_width=True  
                 )  
             with ec3:  
-                st.download_button(  
-                    "🎨 精美HTML", export_to_pretty_html(engine["messages"], engine["topic"]),  
-                    engine['topic'] + ".html", "text/html", use_container_width=True  
-                )  
+                _sop_for_export = st.session_state.sops.get(engine["sop_name"], {})  
+_export_meta_auto = {  
+    "source": "\u81ea\u52a8\u5316\u6d41\u6c34\u7ebf",  
+    "topic": engine["topic"],  
+    "sop_name": engine["sop_name"],  
+    "system_prompt": _sop_for_export.get("system_prompt", ""),  
+    "model": active_p["model"],  
+    "global_file_name": "(\u5df2\u6302\u8f7d)" if engine.get("global_file") else ""  
+}  
+st.download_button(  
+    "🎨 精美HTML", export_to_pretty_html(engine["messages"], engine["topic"], _export_meta_auto),  
+    engine['topic'] + ".html", "text/html", use_container_width=True  
+)  
+
   
             # 字数精控报告  
             if engine["word_count_log"]:  
