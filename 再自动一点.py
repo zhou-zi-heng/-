@@ -137,18 +137,6 @@ def generate_word_doc(messages, is_pure=False):
     return bio.getvalue()  
   
 def export_to_pretty_html(messages, title, meta=None):  
-    """  
-    meta 字典可传入：  
-    {  
-        "source": "自由聊天" 或 "自动化流水线",  
-        "system_prompt": "...",  
-        "sop_name": "...",  
-        "model": "...",  
-        "files": [{"filename":"xx.txt","size":12345}, ...],  
-        "global_file_name": "设定集.txt",  
-        "topic": "..."  
-    }  
-    """  
     if meta is None:  
         meta = {}  
   
@@ -215,7 +203,6 @@ def export_to_pretty_html(messages, title, meta=None):
     </script>  
     """  
   
-    # === 构建信息卡片 ===  
     info_html = ""  
     has_meta = any(meta.get(k) for k in ["source", "system_prompt", "sop_name", "model", "files", "global_file_name", "topic"])  
     if has_meta:  
@@ -243,7 +230,6 @@ def export_to_pretty_html(messages, title, meta=None):
   
         info_html = '<div class="info-card" id="infoCard">' + '<h3>\u2699\ufe0f \u5bf9\u8bdd\u914d\u7f6e\u4fe1\u606f</h3>' + rows + '</div>'  
   
-    # === 构建消息 ===  
     msg_html = ""  
     msg_idx = 0  
     for m in messages:  
@@ -305,8 +291,7 @@ def export_to_pretty_html(messages, title, meta=None):
         + js + '</body></html>'  
     )  
     return full_html.encode('utf-8')  
-
-
+  
   
 def fetch_models(base_url, api_key):  
     try:  
@@ -541,10 +526,10 @@ with st.sidebar:
                 st.rerun()  
             except Exception as e:  
                 st.error("导入失败: " + str(e))  
-
+  
   
 # ==========================================  
-# 模块 1: 自动化流水线  
+# 模块 1: 自动化流水线 (★ 已优化 API 消息构建)  
 # ==========================================  
 if st.session_state.current_page == "🤖 自动化流水线":  
     engine = st.session_state.auto_engine  
@@ -769,6 +754,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             "☑️ 选中导出", msg.get("selected", True), key="ac_" + str(i)  
                         )  
   
+                        # ★★★ 质量优先的流水线执行引擎 ★★★  
             if engine["is_running"] and not engine.get("is_paused", False):  
                 client, profile = get_client()  
                 sop_data = st.session_state.sops[engine["sop_name"]]  
@@ -778,6 +764,7 @@ if st.session_state.current_page == "🤖 自动化流水线":
                 triggers = sop_data.get("triggers", [])  
                 curr_step = steps[engine["current_step_idx"]]  
   
+                # === 构建用户指令（纯净，无任何工程注入）===  
                 current_prompt = engine["pending_instruction"]  
                 if not current_prompt:  
                     current_prompt = curr_step["prompt"].replace(  
@@ -787,44 +774,34 @@ if st.session_state.current_page == "🤖 自动化流水线":
                     )  
                 engine["pending_instruction"] = ""  
   
-                wc_enabled = curr_step.get("enable_word_control", False) and curr_step.get("target_words", 0) > 0  
-                word_injection = ""  
-                if wc_enabled and engine["correction_count"] == 0:  
-                    target_adj = curr_step["target_words"]  
-                    if len(engine["model_bias_history"]) >= 2:  
-                        recent = engine["model_bias_history"][-5:]  
-                        bias = sum(recent) / len(recent)  
-                        if abs(bias - 1.0) > 0.05:  
-                            target_adj = int(curr_step["target_words"] / bias)  
-                    word_injection = "\n\n【本章字数要求：严格控制在 " + str(target_adj) + " 字左右】"  
-  
-                silence = '\n\n【系统强制指令：不要重复上文，不准说好的收到等废话，不准带章节标题，直接从正文第一个字开始！】'  
-                final_prompt = current_prompt + word_injection + silence  
-  
                 engine["messages"].append({"role": "user", "content": current_prompt, "selected": False})  
                 with st.chat_message("user"):  
                     st.markdown("*(⚡ 指令)*: " + current_prompt)  
   
+                # === 构建 API 消息（和自由聊天一样干净）===  
                 api_msgs = []  
+  
+                # A. 单一 system 消息  
+                sys_parts = []  
                 sys_prompt = sop_data.get("system_prompt", "").strip()  
                 if sys_prompt:  
-                    api_msgs.append({"role": "system", "content": sys_prompt})  
+                    sys_parts.append(sys_prompt)  
                 if sop_data.get("memory_mode") == "dynamic" and sop_data.get("negative_memory"):  
-                    api_msgs.append({  
-                        "role": "system",  
-                        "content": "【避坑铁律】：" + '; '.join(sop_data['negative_memory'])  
-                    })  
+                    sys_parts.append("写作时请注意避免：" + '；'.join(sop_data['negative_memory']))  
                 if engine["global_file"]:  
-                    api_msgs.append({"role": "system", "content": "【全局设定】\n" + engine['global_file']})  
+                    sys_parts.append("【世界观设定】\n" + engine['global_file'])  
                 if curr_step.get("reference"):  
-                    api_msgs.append({"role": "system", "content": "【本阶段设定】\n" + curr_step['reference']})  
+                    sys_parts.append("【本章参考资料】\n" + curr_step['reference'])  
+                if sys_parts:  
+                    api_msgs.append({"role": "system", "content": "\n\n".join(sys_parts)})  
   
-                for idx, m in enumerate(engine["messages"]):  
-                    if idx == len(engine["messages"]) - 1 and m["role"] == "user":  
-                        api_msgs.append({"role": "user", "content": final_prompt})  
-                    else:  
-                        api_msgs.append({"role": m["role"], "content": m["content"]})  
+                # B. 历史消息（只保留 selected=True 的有效内容）  
+                for m in engine["messages"]:  
+                    if m["role"] == "assistant" and not m.get("selected", True):  
+                        continue  
+                    api_msgs.append({"role": m["role"], "content": m["content"]})  
   
+                # === 调用 API ===  
                 with st.chat_message("assistant"):  
                     try:  
                         resp = client.chat.completions.create(**build_api_kwargs(profile, api_msgs))  
@@ -839,51 +816,32 @@ if st.session_state.current_page == "🤖 自动化流水线":
                         }  
                         engine["messages"].append(msg_data)  
   
-                        hit_trigger = False  
-  
+                        # === 字数记录（仅记录，不矫正）===  
+                        wc_enabled = curr_step.get("enable_word_control", False) and curr_step.get("target_words", 0) > 0  
                         if wc_enabled:  
                             target = curr_step["target_words"]  
-                            tol = curr_step.get("word_tolerance", 5) / 100.0  
                             deviation = (wc_actual - target) / max(target, 1)  
-                            if abs(deviation) > tol:  
-                                max_corr = curr_step.get("max_corrections", 2)  
-                                if engine["correction_count"] < max_corr:  
-                                    engine["correction_count"] += 1  
-                                    msg_data["selected"] = False  
-                                    msg_data["_word_status"] = (  
-                                        "⚠️ " + str(wc_actual) + "字 (偏差" +  
-                                        "{:+.1%}".format(deviation) + "，矫正第" +  
-                                        str(engine['correction_count']) + "轮)"  
-                                    )  
-                                    if deviation > 0:  
-                                        engine["pending_instruction"] = (  
-                                            "【字数矫正】你刚才写了约" + str(wc_actual) +  
-                                            "字，超出目标" + str(target) +  
-                                            "字。请精简至" + str(target) +  
-                                            "字以内，保持情节完整，删减冗余描写。直接输出修改后的完整正文。"  
-                                        )  
-                                    else:  
-                                        engine["pending_instruction"] = (  
-                                            "【字数矫正】你刚才只写了约" + str(wc_actual) +  
-                                            "字，不足目标" + str(target) +  
-                                            "字。请扩写至" + str(target) +  
-                                            "字左右，增加环境描写和细节。直接输出修改后的完整正文。"  
-                                        )  
-                                    hit_trigger = True  
-                                else:  
-                                    msg_data["_word_status"] = (  
-                                        "⚠️ " + str(wc_actual) + "字 (偏差" +  
-                                        "{:+.1%}".format(deviation) + "，已达最大矫正次数)"  
-                                    )  
+                            if abs(deviation) <= curr_step.get("word_tolerance", 5) / 100.0:  
+                                msg_data["_word_status"] = "✅ " + str(wc_actual) + "字 (目标" + str(target) + "字)"  
                             else:  
-                                msg_data["_word_status"] = (  
-                                    "✅ " + str(wc_actual) + "字 (目标" + str(target) + "字)"  
-                                )  
+                                msg_data["_word_status"] = "📊 " + str(wc_actual) + "字 (目标" + str(target) + "字，偏差" + "{:+.1%}".format(deviation) + ")"  
+                            engine["word_count_log"].append({  
+                                "step": engine["current_step_idx"],  
+                                "loop": engine["current_loop_idx"],  
+                                "target": target,  
+                                "actual": wc_actual,  
+                                "corrections": 0  
+                            })  
   
-                        if not hit_trigger and engine["last_finish_reason"] == "length":  
-                            engine["pending_instruction"] = "⚠️ 因字数限制中断，请紧接上文最后一个字继续往下写。"  
+                        # === 触发器检测 ===  
+                        hit_trigger = False  
+  
+                        # 续写检测  
+                        if engine["last_finish_reason"] == "length":  
+                            engine["pending_instruction"] = "请紧接上文最后一个字继续往下写，保持文风和节奏一致。"  
                             hit_trigger = True  
   
+                        # 关键词触发器  
                         if not hit_trigger:  
                             for t in triggers:  
                                 if t.get("keyword") and t["keyword"] in full_resp:  
@@ -897,19 +855,8 @@ if st.session_state.current_page == "🤖 自动化流水线":
                                         hit_trigger = True  
                                         break  
   
+                        # === 步骤推进 ===  
                         if not hit_trigger:  
-                            if wc_enabled:  
-                                engine["word_count_log"].append({  
-                                    "step": engine["current_step_idx"],  
-                                    "loop": engine["current_loop_idx"],  
-                                    "target": curr_step["target_words"],  
-                                    "actual": wc_actual,  
-                                    "corrections": engine["correction_count"]  
-                                })  
-                                engine["model_bias_history"].append(  
-                                    wc_actual / max(curr_step["target_words"], 1)  
-                                )  
-                            engine["correction_count"] = 0  
                             if engine["current_loop_idx"] < curr_step.get("loop", 1):  
                                 engine["current_loop_idx"] += 1  
                             else:  
@@ -918,14 +865,16 @@ if st.session_state.current_page == "🤖 自动化流水线":
                             if engine["current_step_idx"] >= len(steps):  
                                 engine["is_running"] = False  
                                 engine["is_finished"] = True  
+  
                         st.rerun()  
                     except Exception as e:  
                         st.error("引擎故障: " + str(e))  
                         engine["is_running"] = False  
   
   
+  
 # ==========================================  
-# 模块 2: 自由聊天区 (知识库常驻 + 重新生成 + 编辑)  
+# 模块 2: 自由聊天区 (★ 修复消息延迟显示)  
 # ==========================================  
 elif st.session_state.current_page == "💬 自由聊天区":  
     curr_chat = _ensure_chat(st.session_state.free_chats[st.session_state.current_chat_id])  
@@ -1007,7 +956,7 @@ elif st.session_state.current_page == "💬 自由聊天区":
                             save_free_chats()  
                             st.rerun()  
   
-        # === 发送逻辑 ===  
+    # === 发送逻辑 (★ 修复消息延迟显示) ===  
     need_resend = st.session_state.pop("_auto_resend", False)  
     prompt = st.chat_input("输入消息...")  
   
@@ -1021,7 +970,7 @@ elif st.session_state.current_page == "💬 自由聊天区":
                 curr_chat["title"] = prompt[:10] + "..."  
             curr_chat["messages"].append({"role": "user", "content": prompt})  
   
-        # ★ 立即渲染用户消息气泡（修复延迟显示问题）  
+        # ★ 修复：立即显示用户消息气泡  
         if prompt:  
             with st.chat_message("user"):  
                 st.markdown(prompt)  
@@ -1058,7 +1007,6 @@ elif st.session_state.current_page == "💬 自由聊天区":
             except Exception as e:  
                 st.error("请求失败: " + str(e))  
   
-  
 # ==========================================  
 # 模块 3: SOP与灵魂  
 # ==========================================  
@@ -1084,7 +1032,6 @@ elif st.session_state.current_page == "📝 账号SOP与灵魂":
                 save_sops()  
                 st.rerun()  
   
-            # 从模板创建  
             with st.expander("📦 从预设模板创建"):  
                 for tpl_name, tpl_data in BUILTIN_TEMPLATES.items():  
                     if st.button("使用 " + tpl_name, key="tpl_" + tpl_name, use_container_width=True):  
@@ -1092,7 +1039,6 @@ elif st.session_state.current_page == "📝 账号SOP与灵魂":
                         save_sops()  
                         st.rerun()  
   
-            # 复制 SOP  
             if s_name:  
                 if st.button("📋 复制当前 SOP", use_container_width=True):  
                     new_n = s_name + " (副本)"  
@@ -1162,7 +1108,6 @@ elif st.session_state.current_page == "📝 账号SOP与灵魂":
                                 "循环", min_value=1, value=step.get("loop", 1), key="l_" + str(i)  
                             )  
   
-                        # 字数精控（可选）  
                         wc_on = st.checkbox(  
                             "📏 启用字数精控", step.get("enable_word_control", False),  
                             key="wc_on_" + str(i)  
@@ -1237,7 +1182,6 @@ elif st.session_state.current_page == "📝 账号SOP与灵魂":
                     st.rerun()  
   
                 st.divider()  
-                # 删除 SOP（二次确认）  
                 if st.session_state.get("_confirm_del_sop"):  
                     st.error("确认删除 SOP [" + s_name + "]？不可撤回！")  
                     dsc1, dsc2 = st.columns(2)  
@@ -1349,7 +1293,6 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
         with nc2:  
             p["api_key"] = st.text_input("API Key", p["api_key"], type="password")  
   
-        # API Key 连通测试  
         if p["api_key"]:  
             if st.button("🔑 测试连通性"):  
                 with st.spinner("正在测试..."):  
@@ -1412,7 +1355,6 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             if p["use_frequency_penalty"]:  
                 p["frequency_penalty"] = st.slider("惩罚值", -2.0, 2.0, p.get("frequency_penalty", 0.0), 0.1, label_visibility="collapsed")  
   
-        # 删除引擎（二次确认）  
         if len(st.session_state.profiles) > 1:  
             st.divider()  
             if st.session_state.get("_confirm_del_engine"):  
